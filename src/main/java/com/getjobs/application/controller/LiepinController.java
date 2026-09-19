@@ -32,6 +32,9 @@ public class LiepinController {
     private LiepinJobService liepinJobService;
 
     @Autowired
+    private com.getjobs.worker.service.DeliveryTaskQueue deliveryTaskQueue;
+
+    @Autowired
     private PlaywrightManager playwrightManager;
 
     @Autowired
@@ -88,15 +91,28 @@ public class LiepinController {
                 return ResponseEntity.badRequest().body(response);
             }
 
-            // 异步启动新任务
-            CompletableFuture.runAsync(() -> {
+            // 排队启动新任务（同一时间只跑一个平台，其余排队）
+            if (deliveryTaskQueue.isQueued("liepin")) {
+                response.put("success", false);
+                response.put("message", "猎聘任务已在队列中，等待其他平台投递完成后自动开始");
+                response.put("status", "queued");
+                return ResponseEntity.badRequest().body(response);
+            }
+            boolean accepted = deliveryTaskQueue.submit("liepin", () -> {
+                playwrightManager.bringToFront("liepin");
                 liepinJobService.executeDelivery(progressMessage -> {
                     log.info("[{}] {}", progressMessage.getPlatform(), progressMessage.getMessage());
                 });
             });
+            if (!accepted) {
+                response.put("success", false);
+                response.put("message", "猎聘任务已在队列中，请勿重复提交");
+                response.put("status", "queued");
+                return ResponseEntity.badRequest().body(response);
+            }
 
             response.put("success", true);
-            response.put("message", "猎聘任务启动成功");
+            response.put("message", "猎聘任务启动成功（如其他平台正在投递则自动排队）");
             response.put("status", "started");
 
             log.info("通过API启动猎聘任务成功");

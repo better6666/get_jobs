@@ -1,3 +1,31 @@
+# get_jobs 二开增强版
+
+> 基于 [loks666/get_jobs](https://github.com/loks666/get_jobs) v2.0.1 二次开发。保留上游全部能力（Boss直聘 / 猎聘 / 51job / 智联 四平台自动投简历），新增「画像驱动 + 可配置评分过滤 + AI 个性化话术 + 投递全流程管理」体系。
+
+## 二开新增能力
+
+- **JD 可配置评分过滤**：`GET / PUT / DELETE /api/score/rules`，按标题 / 学历 / 经验 / 行业 / JD 关键词打分，低于阈值不投、但入库留存 `match_score` 便于复盘。
+- **四平台投递队列**：`DeliveryTaskQueue` 让四平台共用同一浏览器实例串行投递，某平台触发当日上限时自动切换下一个。
+- **AI 个性化打招呼语**：兼容任意 OpenAI 接口中转站（带不带 `/v1`、甚至完整端点均可），模型列表一键拉取（`/api/ai/models`）、5xx 自动重试、话术去重 / 清洗。
+- **6 个新增管理页面 + 配套 REST API**：候选人画像、多版本简历、关键词矩阵、投递策略、投递全流程（漏斗）、人工复核中心。
+- **幂等数据库迁移**：`SchemaMigrationInitializer` 启动时补齐新增列，老库升级无需手工 ALTER。
+
+## ⚠️ 许可证
+
+上游采用 **PolyForm Noncommercial 1.0.0**：允许个人 / 内部 / 学习研究 / 免费分发，**禁止任何形式的商业使用**（出售、SaaS 收费、作为付费服务一部分）。商业授权需联系原作者。详见 [LICENSE](./LICENSE)。
+
+## 快速开始
+
+```bash
+# 依赖：JDK 21，首次启动需下载 Gradle 依赖
+./gradlew bootRun -x test
+# 浏览器打开 http://localhost:9527
+```
+
+数据库模板、扫码登录、图片简历、AI Key 等详细配置见下文上游原始说明。
+
+---
+
 <h1 align="center">🍀 Get Jobs【工作无忧】</h1>
 <div align="center">
 

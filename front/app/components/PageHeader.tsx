@@ -6,8 +6,8 @@ export default function PageHeader({
   icon,
   title,
   subtitle,
-  iconClass = 'text-primary',
-  accentBgClass = 'bg-primary/10 dark:bg-primary/20',
+  iconClass = 'text-blue-600 dark:text-blue-400',
+  accentBgClass = 'bg-blue-50 dark:bg-blue-900/20',
   actions,
 }: {
   icon: ReactNode
@@ -19,46 +19,41 @@ export default function PageHeader({
 }) {
   return (
     <motion.div
-      initial={{ opacity: 0, y: -20 }}
+      initial={{ opacity: 0, y: -6 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5, ease: "easeOut" }}
-      className="mb-8"
+      transition={{ duration: 0.3, ease: "easeOut" }}
+      className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4 pb-4 border-b border-slate-200/80 dark:border-neutral-800/80"
     >
-      <div className="flex items-center gap-4 p-6 rounded-2xl bg-white/50 dark:bg-blacksection/50 backdrop-blur-sm border border-stroke/50 dark:border-strokedark shadow-solid-3 dark:shadow-none">
+      <div className="flex items-center gap-3.5 min-w-0">
         <motion.div
-          initial={{ scale: 0, rotate: -180 }}
-          animate={{ scale: 1, rotate: 0 }}
-          transition={{ delay: 0.2, type: "spring", stiffness: 200 }}
-          className={`p-4 rounded-xl ${accentBgClass} shadow-solid-2`}
+          initial={{ scale: 0.85, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ delay: 0.05, duration: 0.2 }}
+          className={`p-2.5 rounded-lg ${accentBgClass} shrink-0`}
         >
-          <span className={`${iconClass} text-2xl`}>{icon}</span>
+          <span className={`${iconClass} text-xl flex`}>{icon}</span>
         </motion.div>
-        <motion.div
-          initial={{ opacity: 0, x: -20 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ delay: 0.3, duration: 0.5 }}
-          className="flex-1"
-        >
-          <h1 className="text-3xl font-bold tracking-tight text-black dark:text-white">
+        <div className="min-w-0">
+          <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white truncate">
             {title}
           </h1>
           {subtitle && (
-            <p className="text-waterloo dark:text-manatee mt-1.5 text-base">
+            <p className="text-xs text-slate-500 dark:text-neutral-400 mt-0.5 truncate">
               {subtitle}
             </p>
           )}
-        </motion.div>
-        {actions && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ delay: 0.4, duration: 0.3 }}
-            className="ml-auto flex items-center gap-2"
-          >
-            {actions}
-          </motion.div>
-        )}
+        </div>
       </div>
+      {actions && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.1, duration: 0.2 }}
+          className="flex items-center gap-2.5 shrink-0 flex-wrap"
+        >
+          {actions}
+        </motion.div>
+      )}
     </motion.div>
   )
 }

@@ -39,6 +39,9 @@ public class ZhilianController {
     @Autowired
     private ZhilianJobService zhilianJobService;
 
+    @Autowired
+    private com.getjobs.worker.service.DeliveryTaskQueue deliveryTaskQueue;
+
     // ==================== 配置管理相关接口 ====================
 
     /**
@@ -286,15 +289,28 @@ public class ZhilianController {
                 return ResponseEntity.badRequest().body(response);
             }
 
-            // 异步启动新任务
-            CompletableFuture.runAsync(() -> {
+            // 排队启动新任务（同一时间只跑一个平台，其余排队）
+            if (deliveryTaskQueue.isQueued("zhilian")) {
+                response.put("success", false);
+                response.put("message", "智联招聘任务已在队列中，等待其他平台投递完成后自动开始");
+                response.put("status", "queued");
+                return ResponseEntity.badRequest().body(response);
+            }
+            boolean accepted = deliveryTaskQueue.submit("zhilian", () -> {
+                playwrightManager.bringToFront("zhilian");
                 zhilianJobService.executeDelivery(progressMessage -> {
                     log.info("[{}] {}", progressMessage.getPlatform(), progressMessage.getMessage());
                 });
             });
+            if (!accepted) {
+                response.put("success", false);
+                response.put("message", "智联招聘任务已在队列中，请勿重复提交");
+                response.put("status", "queued");
+                return ResponseEntity.badRequest().body(response);
+            }
 
             response.put("success", true);
-            response.put("message", "智联招聘任务启动成功");
+            response.put("message", "智联招聘任务启动成功（如其他平台正在投递则自动排队）");
             response.put("status", "started");
 
             log.info("通过API启动智联招聘任务成功");

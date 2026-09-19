@@ -51,6 +51,12 @@ public class Liepin {
     @Autowired
     private LiepinService liepinService;
 
+    @Autowired
+    private com.getjobs.application.service.AiService aiService;
+
+    /** 最近发出的AI追问消息（去重，避免句式雷同） */
+    private final java.util.Deque<String> recentGreetings = new java.util.concurrent.ConcurrentLinkedDeque<>();
+
     public interface ProgressCallback {
         void onProgress(String message, Integer current, Integer total);
     }
@@ -118,12 +124,22 @@ public class Liepin {
             return 0;
         }
 
+        int failedKeywords = 0;
         for (String keyword : keywords) {
             if (shouldStop()) {
                 info("收到停止指令，提前结束关键词循环");
                 break;
             }
-            submit(keyword);
+            try {
+                submit(keyword);
+            } catch (Exception e) {
+                // 单个关键词失败不影响其余关键词
+                failedKeywords++;
+                log.error("关键词【{}】投递失败，跳过继续: {}", keyword, e.getMessage());
+            }
+        }
+        if (failedKeywords > 0) {
+            info(String.format("有 %d 个关键词投递失败（已跳过）", failedKeywords));
         }
         return resultList.size();
     }
@@ -229,11 +245,43 @@ public class Liepin {
     private void submit(String keyword) {
         // 清洗关键词：去掉前后引号与多余空白
         String cleanKeyword = keyword == null ? "" : keyword.replace("\"", "").trim();
-        page.navigate(getSearchUrl() + "&key=" + cleanKeyword);
-        
-        // 等待分页元素加载
-        page.waitForSelector(PAGINATION_BOX, new Page.WaitForSelectorOptions().setTimeout(10000));
+        // navigate 偶发被连接层的僵尸响应事件干扰（Object doesn't exist），重试一次即可恢复
+        boolean navigated = false;
+        for (int attempt = 0; attempt < 2 && !navigated; attempt++) {
+            try {
+                page.navigate(getSearchUrl() + "&key=" + cleanKeyword);
+                navigated = true;
+            } catch (Exception navError) {
+                if (attempt == 0 && String.valueOf(navError.getMessage()).contains("Object doesn't exist")) {
+                    log.warn("导航遇到僵尸事件，重试: {}", navError.getMessage());
+                    PlaywrightUtil.sleep(2);
+                } else {
+                    throw navError;
+                }
+            }
+        }
+
+        // 等待分页元素加载（轮询实现：waitForSelector 会被响应拦截器里已销毁对象的异常干扰）
         Locator paginationBox = page.locator(PAGINATION_BOX);
+        boolean paginationAppeared = false;
+        for (int waitIdx = 0; waitIdx < 20; waitIdx++) {
+            if (shouldStop()) {
+                info("收到停止指令，结束投递");
+                return;
+            }
+            try {
+                if (paginationBox.count() > 0 && paginationBox.first().isVisible()) {
+                    paginationAppeared = true;
+                    break;
+                }
+            } catch (Exception ignored) {
+            }
+            PlaywrightUtil.sleep(1);
+        }
+        if (!paginationAppeared) {
+            log.warn("搜索结果分页未出现（可能被登录/验证弹窗挡住），跳过关键词: {}", cleanKeyword);
+            return;
+        }
         Locator lis = paginationBox.locator("li");
         setMaxPage(lis);
         
@@ -251,13 +299,27 @@ public class Liepin {
             } catch (Exception ignored) {
             }
             
-        // 等待岗位卡片挂载（不要求可见，避免因遮挡造成超时）
-        page.waitForSelector(
-            JOB_CARDS,
-            new Page.WaitForSelectorOptions()
-                .setState(WaitForSelectorState.ATTACHED)
-                .setTimeout(15000)
-        );
+        // 等待岗位卡片挂载（轮询实现，不要求可见，避免因遮挡或已销毁对象异常造成超时）
+        Locator jobCardsWait = page.locator(JOB_CARDS);
+        boolean cardsAppeared = false;
+        for (int waitIdx = 0; waitIdx < 15; waitIdx++) {
+            if (shouldStop()) {
+                info("收到停止指令，结束投递");
+                return;
+            }
+            try {
+                if (jobCardsWait.count() > 0) {
+                    cardsAppeared = true;
+                    break;
+                }
+            } catch (Exception ignored) {
+            }
+            PlaywrightUtil.sleep(1);
+        }
+        if (!cardsAppeared) {
+            log.warn("岗位卡片未加载出来，跳过关键词: {}", cleanKeyword);
+            return;
+        }
             // 额外等待一次接口响应，确保 lastApiEntities 刷新（精确匹配PC搜索接口）
             try {
                 page.waitForResponse(r -> {
@@ -278,11 +340,23 @@ public class Liepin {
                 String cls = nextLi.first().getAttribute("class");
                 boolean disabled = cls != null && cls.contains("ant-pagination-disabled");
                 if (!disabled) {
+                    dismissBlockingModals();
                     Locator btn = nextLi.first().locator("button.ant-pagination-item-link");
-                    if (btn.count() > 0) {
-                        btn.first().click();
-                    } else {
-                        nextLi.first().click();
+                    try {
+                        if (btn.count() > 0) {
+                            btn.first().click(new Locator.ClickOptions().setTimeout(10_000));
+                        } else {
+                            nextLi.first().click(new Locator.ClickOptions().setTimeout(10_000));
+                        }
+                    } catch (Exception clickError) {
+                        // 翻页被弹窗挡住：关闭后重试一次
+                        log.warn("翻页点击被弹窗拦截，关闭弹窗后重试: {}", clickError.getMessage());
+                        dismissBlockingModals();
+                        if (btn.count() > 0) {
+                            btn.first().click(new Locator.ClickOptions().setTimeout(10_000));
+                        } else {
+                            nextLi.first().click(new Locator.ClickOptions().setTimeout(10_000));
+                        }
                     }
                 } else {
                     break;
@@ -323,6 +397,142 @@ public class Liepin {
         }
     }
 
+    /**
+     * 关闭猎聘弹出的遮挡弹窗（如"完善简历" ant-modal），避免拦截后续所有点击
+     */
+    private void dismissBlockingModals() {
+        try {
+            Locator modal = page.locator(".ant-modal-wrap:visible .ant-modal-close");
+            if (modal.count() > 0 && modal.first().isVisible()) {
+                modal.first().click();
+                log.info("已关闭猎聘遮挡弹窗（完善简历等）");
+                PlaywrightUtil.sleep(1);
+            } else if (page.locator(".ant-modal-wrap:visible").count() > 0) {
+                // 没有 close 按钮时用 ESC 兜底
+                page.keyboard().press("Escape");
+                PlaywrightUtil.sleep(1);
+            }
+        } catch (Exception ignore) {
+        }
+    }
+
+    /**
+     * 猎聘聊天窗口里追加一条 AI 生成的个性化消息。
+     * 平台自动发的招呼语是 App 里的固定文案，这条追问让每个 HR 收到的内容都不同。
+     * 全程 best-effort：找不到输入框/AI失败都静默跳过，不影响投递主流程。
+     */
+    private void sendAiFollowUp(String jobName, String companyName) {
+        try {
+            // 1) 定位聊天输入框（猎聘IM是 contenteditable 或 textarea）
+            Locator input = page.locator(
+                    "div.__im_basic__chat-wrapper [contenteditable='true']:not([style*='display: none']), "
+                  + ".__im_basic__chat-input textarea, "
+                  + "div[class*='im-basic'] textarea, "
+                  + "div[class*='chat'] div[contenteditable='true']").first();
+            boolean inputReady = false;
+            for (int i = 0; i < 5; i++) {
+                try {
+                    if (input.count() > 0 && input.isVisible()) {
+                        inputReady = true;
+                        break;
+                    }
+                } catch (Exception ignore) {
+                }
+                PlaywrightUtil.sleep(1);
+            }
+            if (!inputReady) {
+                log.debug("猎聘聊天输入框未找到，跳过AI追问");
+                return;
+            }
+
+            // 2) 生成AI消息（带去重与风格轮换）
+            String aiConfigIntroduce = "";
+            String prompt = null;
+            try {
+                var aiEntity = aiService.getAiConfig();
+                if (aiEntity != null) {
+                    aiConfigIntroduce = aiEntity.getIntroduce() != null ? aiEntity.getIntroduce() : "";
+                    prompt = aiEntity.getPrompt();
+                }
+            } catch (Exception ignore) {
+            }
+            String requestMessage = "你是一名求职顾问。求职者背景：【" + aiConfigIntroduce + "】\n"
+                    + "猎聘平台刚向「" + (companyName == null ? "该公司" : companyName) + "」的「" + (jobName == null ? "该岗位" : jobName) + "」岗位发送过系统默认打招呼语。\n"
+                    + "请写一条40到70字的补充消息，要求：\n"
+                    + "1. 不重复自我介绍套话，从岗位/公司业务切入，展示一个具体的理解或亮点；\n"
+                    + "2. 开头句式必须与下面这些历史消息明显不同：\n";
+            int shown = 0;
+            for (String g : recentGreetings) {
+                requestMessage += "- " + g + "\n";
+                if (++shown >= 6) break;
+            }
+            requestMessage += "3. 只输出消息正文。";
+
+            String message = sanitizeAiGreeting(aiService.sendRequest(requestMessage));
+            if (message == null || message.isBlank()) return;
+            message = message.trim();
+            boolean looksLikeGreeting = message.contains("我") && !message.contains("求职者")
+                    && !message.contains("差异化") && message.length() >= 15 && message.length() <= 250;
+            if (!looksLikeGreeting) {
+                log.debug("AI输出不像追问消息，跳过");
+                return;
+            }
+            recentGreetings.addFirst(message);
+            while (recentGreetings.size() > 6) {
+                recentGreetings.removeLast();
+            }
+
+            // 3) 写入并发送
+            input.click();
+            Object tagObj = input.evaluate("el => el.tagName.toLowerCase()");
+            if (tagObj instanceof String && ((String) tagObj).equals("textarea")) {
+                input.fill(message);
+            } else {
+                input.evaluate("(el, msg) => { el.innerText = msg; el.dispatchEvent(new Event('input', {bubbles: true})); }", message);
+            }
+            PlaywrightUtil.sleep(1);
+            input.press("Enter");
+            PlaywrightUtil.sleep(1);
+            log.info("猎聘AI追问消息已发送 | 岗位: {} | 内容: {}", jobName, message);
+        } catch (Exception e) {
+            log.debug("猎聘AI追问消息发送失败（不影响投递）: {}", e.getMessage());
+        }
+    }
+
+
+    /**
+     * 清洗AI输出：剥掉思考过程/前缀废话，只留招呼语正文。
+     */
+    private String sanitizeAiGreeting(String raw) {
+        if (raw == null) return null;
+        String s = raw.trim();
+        // 去掉markdown代码块包裹
+        s = s.replaceAll("(?s)```[a-z]*\n?", "").replace("```", "").trim();
+        boolean looksLikeReasoning = s.startsWith("好的") || s.startsWith("明白") || s.startsWith("以下是")
+                || s.contains("这个任务") || s.contains("打招呼语") || s.contains("分析一下")
+                || s.contains("核心是") || s.contains("求职者是") && s.contains("写一条");
+        if (looksLikeReasoning) {
+            // 优先提取「」内的内容
+            java.util.regex.Matcher m1 = java.util.regex.Pattern.compile("「([^」]{20,})」").matcher(s);
+            if (m1.find()) return m1.group(1).trim();
+            // 再试中文双引号
+            java.util.regex.Matcher m2 = java.util.regex.Pattern.compile("“([^”]{20,})”").matcher(s);
+            if (m2.find()) return m2.group(1).trim();
+            // 兜底：取最后一个非空行（模型通常最后才给正文）
+            String[] lines = s.split("\n");
+            for (int i = lines.length - 1; i >= 0; i--) {
+                String line = lines[i].trim();
+                if (line.length() >= 15 && !line.startsWith("好的") && !line.startsWith("以下是")
+                        && !line.contains("打招呼语") && !line.contains("核心是")) {
+                    return line;
+                }
+            }
+        }
+        // 去掉开头的客套前缀
+        s = s.replaceFirst("^^(好的[，,！!]?|明白了[，,。.]?|以下是[：:]?)\\s*", "").trim();
+        return s;
+    }
+
     private void submitJob() {
         // 获取hr数量
         Locator jobCards = page.locator(JOB_CARDS);
@@ -333,6 +543,8 @@ public class Liepin {
                 info("收到停止指令，结束卡片遍历");
                 return;
             }
+            // 猎聘会弹"完善简历"等 ant-modal 弹窗挡住所有点击，处理每张卡片前先关掉
+            dismissBlockingModals();
             // 获取当前岗位卡片（用于后续操作与缺省展示）
             Locator currentJobCard = page.locator(JOB_CARDS).nth(i);
             // 从接口数据获取展示所需字段，若接口数据缺失则使用缺省占位，仍尝试打招呼
@@ -538,14 +750,17 @@ public class Liepin {
                         log.warn("鼠标微调失败，直接点击按钮: {}", moveError.getMessage());
                     }
                     
-                    button.click();
+                    dismissBlockingModals();
+                    button.click(new Locator.ClickOptions().setTimeout(10_000));
                     // PlaywrightUtil.sleep(1); // 等待点击响应
                     
-                    // 猎聘会自动发送打招呼语，所以我们只需要关闭聊天窗口
+                    // 猎聘会自动发送固定的App打招呼语，我们在聊天窗口里追加一条AI个性化消息，避免每条都一样
                     try {
                         // 等待聊天界面加载
                         page.waitForSelector(CHAT_HEADER, new Page.WaitForSelectorOptions().setTimeout(3000));
-                        
+
+                        sendAiFollowUp(jobName, companyName);
+
                         // 直接关闭聊天窗口
                         Locator close = page.locator(CHAT_CLOSE);
                         if (close.count() > 0) {
@@ -571,7 +786,19 @@ public class Liepin {
                     }
                     
                 } catch (Exception e) {
-                    log.error("点击按钮失败: {}", e.getMessage());
+                    log.error("点击按钮失败: {}，尝试关闭遮挡弹窗后重试一次", e.getMessage());
+                    try {
+                        dismissBlockingModals();
+                        button.click(new Locator.ClickOptions().setTimeout(10_000));
+                        // 猎聘会自动发送打招呼语，点击成功视为已投递
+                        resultList.add(sb.append("【").append(companyName).append(" ").append(jobName).append(" ").append(salary).append(" ").append(recruiterName).append(" ").append("】").toString());
+                        sb.setLength(0);
+                        if (jobIdForUpdate != null) {
+                            liepinService.markDelivered(jobIdForUpdate);
+                        }
+                    } catch (Exception retryError) {
+                        log.error("重试点击仍失败: {}", retryError.getMessage());
+                    }
                 }
             } else {
                 // 如果按钮是“继续聊”，视为已投递

@@ -45,6 +45,7 @@ public class JobController {
     private final Job51Service job51Service;
     private final Job51JobService job51JobService;
     private final PlaywrightManager playwrightManager;
+    private final com.getjobs.worker.service.DeliveryTaskQueue deliveryTaskQueue;
     private final CookieService cookieService;
 
     // SSE emitter lists
@@ -395,13 +396,28 @@ public class JobController {
                 response.put("status", "running");
                 return ResponseEntity.badRequest().body(response);
             }
-            CompletableFuture.runAsync(() -> job51JobService.executeDelivery(pm -> {
-                // 推送到 SSE 并保留日志输出
-                sendJob51Progress(pm);
-                log.info("[{}] {}", pm.getPlatform(), pm.getMessage());
-            }));
+            if (deliveryTaskQueue.isQueued("51job")) {
+                response.put("success", false);
+                response.put("message", "51job任务已在队列中，等待其他平台投递完成后自动开始");
+                response.put("status", "queued");
+                return ResponseEntity.badRequest().body(response);
+            }
+            boolean accepted = deliveryTaskQueue.submit("51job", () -> {
+                playwrightManager.bringToFront("51job");
+                job51JobService.executeDelivery(pm -> {
+                    // 推送到 SSE 并保留日志输出
+                    sendJob51Progress(pm);
+                    log.info("[{}] {}", pm.getPlatform(), pm.getMessage());
+                });
+            });
+            if (!accepted) {
+                response.put("success", false);
+                response.put("message", "51job任务已在队列中，请勿重复提交");
+                response.put("status", "queued");
+                return ResponseEntity.badRequest().body(response);
+            }
             response.put("success", true);
-            response.put("message", "51job任务启动成功");
+            response.put("message", "51job任务启动成功（如其他平台正在投递则自动排队）");
             response.put("status", "started");
             log.info("通过API启动51job任务成功");
             return ResponseEntity.ok(response);

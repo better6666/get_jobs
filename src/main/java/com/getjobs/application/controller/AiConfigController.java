@@ -126,4 +126,63 @@ public class AiConfigController {
             return ResponseEntity.internalServerError().body(response);
         }
     }
+
+    /**
+     * 获取可用模型列表（GET）
+     * 示例：/api/ai/models?baseUrl=https://api.openai.com&apiKey=sk-xxx
+     * baseUrl/apiKey 缺省时使用数据库中已保存的配置
+     */
+    @GetMapping("/models")
+    public ResponseEntity<Map<String, Object>> listModels(
+            @RequestParam(name = "baseUrl", required = false) String baseUrl,
+            @RequestParam(name = "apiKey", required = false) String apiKey) {
+        Map<String, Object> response = new HashMap<>();
+        try {
+            java.util.List<String> models;
+            boolean hasBaseUrl = baseUrl != null && !baseUrl.trim().isEmpty();
+            boolean hasApiKey = apiKey != null && !apiKey.trim().isEmpty();
+            if (hasBaseUrl && hasApiKey) {
+                // 优先用页面传入的值，方便保存前先试拉取
+                models = aiService.listModels(baseUrl, apiKey);
+            } else {
+                models = aiService.listModels();
+            }
+            response.put("success", true);
+            response.put("data", models);
+            response.put("message", "获取模型列表成功，共 " + models.size() + " 个模型");
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("获取模型列表失败", e);
+            response.put("success", false);
+            response.put("message", e.getMessage() == null ? "获取模型列表失败" : e.getMessage());
+            return ResponseEntity.badRequest().body(response);
+        }
+    }
+
+    /**
+     * 测试 AI 接口是否可用（POST）
+     * 请求体可带 baseUrl, apiKey, model, prompt；若未传则默认使用已保存配置
+     */
+    @PostMapping("/test")
+    public ResponseEntity<Map<String, Object>> testConnection(@RequestBody(required = false) Map<String, String> body) {
+        Map<String, Object> response = new HashMap<>();
+        try {
+            String baseUrl = body != null ? body.get("baseUrl") : null;
+            String apiKey = body != null ? body.get("apiKey") : null;
+            String model = body != null ? body.get("model") : null;
+            String prompt = body != null ? body.get("prompt") : null;
+
+            Map<String, Object> testResult = aiService.testAiConnection(baseUrl, apiKey, model, prompt);
+            response.put("success", true);
+            response.put("data", testResult);
+            response.put("message", testResult.get("message"));
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("AI 连通性测试失败", e);
+            response.put("success", false);
+            String errMsg = e.getMessage() == null ? "连通性测试失败，未知错误" : e.getMessage();
+            response.put("message", errMsg);
+            return ResponseEntity.badRequest().body(response);
+        }
+    }
 }

@@ -1,14 +1,29 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
 import { Label } from "@/components/ui/label"
 import PageHeader from "@/app/components/PageHeader"
-import { BiRefresh, BiDownload, BiBarChart, BiLineChart, BiPieChart, BiBriefcase } from "react-icons/bi"
+import {
+  BiRefresh,
+  BiDownload,
+  BiBarChart,
+  BiLineChart,
+  BiPieChart,
+  BiBriefcase,
+  BiBuilding,
+  BiMapPin,
+  BiFilter,
+  BiSearch,
+  BiLinkExternal,
+  BiX,
+  BiChevronLeft,
+  BiChevronRight
+} from "react-icons/bi"
 import { parseSalary } from "@/lib/salary"
+import { API_BASE } from "@/lib/api"
 
 type NameValue = { name: string; value: number }
 type BucketValue = { bucket: string; value: number }
@@ -60,22 +75,9 @@ type PagedResult = {
   size: number
 }
 
-import { API_BASE } from "@/lib/api"
 const CATEGORY_COLORS = [
-  "#3b82f6",
-  "#10b981",
-  "#f59e0b",
-  "#ef4444",
-  "#6366f1",
-  "#22c55e",
-  "#fb7185",
-  "#a78bfa",
-  "#f97316",
-  "#06b6d4",
-  "#4ade80",
-  "#2dd4bf",
-  "#f472b6",
-  "#64748b",
+  "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#6366f1",
+  "#22c55e", "#fb7185", "#a78bfa", "#f97316", "#06b6d4"
 ]
 
 function ChartCanvas({
@@ -95,7 +97,6 @@ function ChartCanvas({
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const chartRef = useRef<any | null>(null)
-  const toSolid = (hex: string) => hex
 
   async function ensureChart(): Promise<any> {
     if (typeof window !== "undefined" && (window as any).Chart) return (window as any).Chart
@@ -119,38 +120,18 @@ function ChartCanvas({
   useEffect(() => {
     const ctx = canvasRef.current?.getContext("2d")
     if (!ctx) return
-
     if (chartRef.current) {
       chartRef.current.destroy()
       chartRef.current = null
     }
 
     let cancelled = false
-
-    const pieColorsBase = [
-      "#3b82f6",
-      "#10b981",
-      "#f59e0b",
-      "#ef4444",
-      "#6366f1",
-      "#22c55e",
-      "#fb7185",
-      "#a78bfa",
-      "#f97316",
-      "#06b6d4",
-    ]
-
+    const pieColorsBase = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#6366f1", "#22c55e", "#fb7185", "#a78bfa", "#f97316", "#06b6d4"]
     const backgroundColor = (() => {
-      if (type === "pie") {
-        const arr = (colors && colors.length ? colors : pieColorsBase).slice(0, labels.length)
-        return arr
-      }
-      if (type === "bar" && colors && colors.length) {
-        return colors.slice(0, data.length).map((c) => toSolid(c))
-      }
-      return toSolid(color ?? "#3b82f6")
+      if (type === "pie") return (colors && colors.length ? colors : pieColorsBase).slice(0, labels.length)
+      if (type === "bar" && colors && colors.length) return colors.slice(0, data.length)
+      return color ?? "#3b82f6"
     })()
-
     const borderColor = (() => {
       if (type === "pie") return undefined
       if (type === "bar" && colors && colors.length) return colors.slice(0, data.length)
@@ -162,12 +143,15 @@ function ChartCanvas({
       data,
       backgroundColor,
       borderColor,
+      borderWidth: type === "pie" ? 0 : 1.5,
+      borderRadius: type === "bar" ? 4 : 0,
     }
 
     if (type === "line") {
       dataset.fill = false
-      dataset.pointBackgroundColor = toSolid(color)
-      dataset.pointBorderColor = toSolid(color)
+      dataset.tension = 0.3
+      dataset.pointBackgroundColor = color
+      dataset.pointBorderColor = color
     }
 
     ;(async () => {
@@ -181,14 +165,21 @@ function ChartCanvas({
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
-              legend: { display: type === "pie" },
-              title: { display: !!title, text: title },
+              legend: {
+                display: type === "pie",
+                position: "bottom",
+                labels: { boxWidth: 12, font: { size: 11 } }
+              },
+              title: { display: false }
             },
-            scales: type !== "pie" ? { x: { ticks: { autoSkip: true } }, y: { beginAtZero: true } } : undefined,
-          },
+            scales: type !== "pie" ? {
+              x: { ticks: { autoSkip: true, maxRotation: 45, font: { size: 10 } }, grid: { display: false } },
+              y: { beginAtZero: true, ticks: { font: { size: 10 } }, grid: { color: "rgba(150, 150, 150, 0.1)" } }
+            } : undefined
+          }
         })
-      } catch (error) {
-        console.error("Failed to create chart:", error)
+      } catch (e) {
+        console.error("Failed to create chart:", e)
       }
     })()
 
@@ -201,19 +192,20 @@ function ChartCanvas({
     }
   }, [type, labels, data, title, color, colors])
 
-  return <canvas ref={canvasRef} className="w-full h-64" />
+  return (
+    <div className="w-full h-44 relative">
+      <canvas ref={canvasRef} />
+    </div>
+  )
 }
 
 export default function AnalysisContent({ showHeader = false }: { showHeader?: boolean }) {
   const [stats, setStats] = useState<StatsResponse | null>(null)
-  const [loadingStats, setLoadingStats] = useState(true)
-
+  const [loadingStats, setLoadingStats] = useState(false)
   const [items, setItems] = useState<LiepinJob[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [size, setSize] = useState(20)
-  const [inputPage, setInputPage] = useState<number | string>(1)
-  const [inputSize, setInputSize] = useState<number | string>(20)
+  const [size, setSize] = useState(15)
 
   const [statuses, setStatuses] = useState<string[]>([])
   const [location, setLocation] = useState<string>("")
@@ -223,18 +215,16 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
   const [maxK, setMaxK] = useState<string>("")
   const [keyword, setKeyword] = useState<string>("")
   const [loadingList, setLoadingList] = useState(false)
+  const [reloading, setReloading] = useState(false)
   const [exporting, setExporting] = useState(false)
+
+  // 折叠控制与选项卡
+  const [showCharts, setShowCharts] = useState(false)
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false)
+  const [chartTab, setChartTab] = useState<"overview" | "companies" | "dimensions">("overview")
   const [detailJob, setDetailJob] = useState<LiepinJob | null>(null)
-  const [computedSalaryBuckets, setComputedSalaryBuckets] = useState<BucketValue[]>([])
 
   const statusOptions = ["未投递", "已投递"]
-
-  useEffect(() => {
-    loadStats()
-  }, [])
-
-  useEffect(() => { setInputPage(page) }, [page])
-  useEffect(() => { setInputSize(size) }, [size])
 
   const formatDateOnly = (s?: string) => {
     if (!s) return ""
@@ -259,7 +249,6 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
     if (keyword) params.set("keyword", keyword)
     params.set("page", String(toPage))
     params.set("size", String(toSize))
-
     try {
       setLoadingList(true)
       const res = await fetch(`${API_BASE}/api/liepin/list?${params.toString()}`)
@@ -284,7 +273,6 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
     if (minK) params.set("minK", String(Number(minK)))
     if (maxK) params.set("maxK", String(Number(maxK)))
     if (keyword) params.set("keyword", keyword)
-
     try {
       setLoadingStats(true)
       const res = await fetch(`${API_BASE}/api/liepin/stats?${params.toString()}`)
@@ -297,7 +285,21 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
     }
   }
 
-  useEffect(() => { loadList(1, size) }, [])
+  useEffect(() => {
+    loadStats()
+    loadList(1, size)
+  }, [])
+
+  const onReload = async () => {
+    try {
+      setReloading(true)
+      await Promise.all([loadList(1, size), loadStats()])
+    } catch (e) {
+      console.error("reload failed", e)
+    } finally {
+      setReloading(false)
+    }
+  }
 
   const exportCSV = async () => {
     try {
@@ -315,7 +317,6 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
       let currentPage = 1
       let all: LiepinJob[] = []
       let totalCount = 0
-
       while (true) {
         const params = new URLSearchParams(baseParams)
         params.set("page", String(currentPage))
@@ -329,18 +330,7 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
         currentPage += 1
       }
 
-      const header = [
-        "公司名称",
-        "岗位名称",
-        "薪资",
-        "工作地点",
-        "经验",
-        "学历",
-        "HR",
-        "投递状态",
-        "链接",
-        "创建时间",
-      ]
+      const header = ["公司名称", "岗位名称", "薪资", "工作地点", "经验", "学历", "HR", "投递状态", "链接", "创建时间"]
       const rows = all.map((it) => [
         it.compName || "",
         it.jobTitle || "",
@@ -349,13 +339,11 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
         it.jobExpReq || "",
         it.jobEduReq || "",
         it.hrName || "",
-        (it.delivered === 1 ? "已投递" : "未投递"),
+        it.delivered === 1 ? "已投递" : "未投递",
         it.jobLink || "",
         it.createTime || "",
       ])
-      const csv = [header, ...rows]
-        .map((r) => r.map((v) => (String(v).includes(",") ? `"${String(v).replace(/"/g, '""')}"` : String(v))).join(","))
-        .join("\n")
+      const csv = [header, ...rows].map((r) => r.map((v) => (String(v).includes(",") ? `"${String(v).replace(/"/g, '""')}"` : String(v))).join(",")).join("\n")
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
@@ -371,224 +359,294 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
     }
   }
 
-  // 当后端的薪资分布为空或全零时，使用全量分页数据计算分布
-  const refreshComputedSalaryBuckets = async () => {
-    try {
-      const baseParams = new URLSearchParams()
-      if (statuses.length) baseParams.set("statuses", statuses.join(","))
-      if (location) baseParams.set("location", location)
-      if (experience) baseParams.set("experience", experience)
-      if (degree) baseParams.set("degree", degree)
-      if (minK) baseParams.set("minK", String(Number(minK)))
-      if (maxK) baseParams.set("maxK", String(Number(maxK)))
-      if (keyword) baseParams.set("keyword", keyword)
-
-      const pageSize = 1000
-      let currentPage = 1
-      let totalCount = 0
-      const ks: number[] = []
-
-      while (true) {
-        const params = new URLSearchParams(baseParams)
-        params.set("page", String(currentPage))
-        params.set("size", String(pageSize))
-        const res = await fetch(`${API_BASE}/api/liepin/list?${params.toString()}`)
-        const data: PagedResult = await res.json()
-        const chunk = data.items || []
-        if (currentPage === 1) totalCount = data.total || chunk.length
-        for (const it of chunk) {
-          const info = parseSalary(it.jobSalaryText)
-          if (info && !isNaN(info.medianK)) ks.push(info.medianK)
-        }
-        if (currentPage * pageSize >= totalCount || chunk.length === 0) break
-        currentPage += 1
-      }
-
-      if (!ks.length) { setComputedSalaryBuckets([]); return }
-      const buckets: { key: string; min: number; max: number | null }[] = [
-        { key: "0-10K", min: 0, max: 10 },
-        { key: "10-15K", min: 10, max: 15 },
-        { key: "15-20K", min: 15, max: 20 },
-        { key: "20-25K", min: 20, max: 25 },
-        { key: ">=25K", min: 25, max: null },
-      ]
-      const counts = new Map<string, number>()
-      for (const b of buckets) counts.set(b.key, 0)
-      for (const k of ks) {
-        const b = buckets.find((x) => (k >= x.min) && (x.max == null ? true : k < x.max))
-        if (b) counts.set(b.key, (counts.get(b.key) || 0) + 1)
-      }
-      setComputedSalaryBuckets(buckets.map((b) => ({ bucket: b.key, value: counts.get(b.key) || 0 })))
-    } catch (e) {
-      console.error("compute salary buckets failed", e)
-      setComputedSalaryBuckets([])
-    }
-  }
-
-  // 监听筛选变化与统计加载完毕后刷新分布
-  useEffect(() => {
-    const apiBuckets = stats?.charts?.salaryBuckets || []
-    const sum = apiBuckets.reduce((a, b) => a + (b?.value || 0), 0)
-    if (apiBuckets.length === 0 || sum === 0) {
-      refreshComputedSalaryBuckets()
-    } else {
-      setComputedSalaryBuckets([])
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stats, statuses.join(","), location, experience, degree, minK, maxK, keyword])
-
-  // 移除原“累计趋势”计算逻辑；改为以现有维度（经验）展示折线图
-
-  const badgeClass = (kind: "delivery" | "recruitment", value?: string) => {
-    const base = "px-2 py-1 rounded-full text-xs font-medium whitespace-nowrap"
-    const v = (value || "").trim()
-    if (kind === "delivery") {
-      if (v.includes("已投递")) return `${base} bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300`
-      return `${base} bg-slate-100 text-slate-700 dark:bg-slate-800/50 dark:text-slate-300`
-    }
-    return `${base} bg-gray-100 text-gray-700 dark:bg-gray-700/50 dark:text-gray-200`
-  }
-
   const kpiCards = useMemo(() => {
     const k = stats?.kpi
-    // 前端容错：当后端未提供均值时，基于当前列表估算月薪均值(K)
-    const avgMonthlyKFromItems = (() => {
-      if (!items?.length) return undefined
-      const ks: number[] = []
-      for (const it of items) {
-        const info = parseSalary(it.jobSalaryText)
-        if (info && !isNaN(info.medianK)) ks.push(info.medianK)
-      }
-      if (!ks.length) return undefined
-      const sum = ks.reduce((a, b) => a + b, 0)
-      return Math.round((sum / ks.length) * 10) / 10
-    })()
     return [
-      { title: "总岗位数", value: k?.total ?? 0 },
-      { title: "已投递", value: k?.delivered ?? 0 },
-      { title: "未投递", value: k?.pending ?? 0 },
-      { title: "平均月薪(K)", value: (k?.avgMonthlyK ?? avgMonthlyKFromItems ?? 0) },
+      { title: "总岗位数", value: k?.total ?? 0, color: "text-slate-900 dark:text-white" },
+      { title: "已投递", value: k?.delivered ?? 0, color: "text-emerald-600 dark:text-emerald-400" },
+      { title: "未投递", value: k?.pending ?? 0, color: "text-blue-600 dark:text-blue-400" },
+      { title: "平均月薪(K)", value: k?.avgMonthlyK ?? 0, color: "text-indigo-600 dark:text-indigo-400" },
     ]
-  }, [stats, items])
-
-  // 前端容错：当图表数据缺失时，基于列表计算分布
-  const fallbackSalaryBuckets = useMemo(() => {
-    const ks: number[] = []
-    for (const it of items) {
-      const info = parseSalary(it.jobSalaryText)
-      if (info && !isNaN(info.medianK)) ks.push(info.medianK)
-    }
-    if (!ks.length) return [] as BucketValue[]
-    const buckets: { key: string; min: number; max: number | null }[] = [
-      { key: "0-10K", min: 0, max: 10 },
-      { key: "10-15K", min: 10, max: 15 },
-      { key: "15-20K", min: 15, max: 20 },
-      { key: "20-25K", min: 20, max: 25 },
-      { key: ">=25K", min: 25, max: null },
-    ]
-    const counts = new Map<string, number>()
-    for (const b of buckets) counts.set(b.key, 0)
-    for (const k of ks) {
-      const b = buckets.find((x) => (k >= x.min) && (x.max == null ? true : k < x.max))
-      if (b) counts.set(b.key, (counts.get(b.key) || 0) + 1)
-    }
-    return buckets.map((b) => ({ bucket: b.key, value: counts.get(b.key) || 0 }))
-  }, [items])
-
-  const fallbackByExperience = useMemo(() => {
-    if (!items?.length) return [] as NameValue[]
-    const dict = new Map<string, number>()
-    const norm = (s?: string) => (s || "").trim() || "未知"
-    for (const it of items) {
-      const k = norm(it.jobExpReq)
-      dict.set(k, (dict.get(k) || 0) + 1)
-    }
-    return Array.from(dict.entries()).map(([name, value]) => ({ name, value }))
-  }, [items])
-
-  const fallbackByDegree = useMemo(() => {
-    if (!items?.length) return [] as NameValue[]
-    const dict = new Map<string, number>()
-    const norm = (s?: string) => (s || "").trim() || "不限"
-    for (const it of items) {
-      const k = norm(it.jobEduReq)
-      dict.set(k, (dict.get(k) || 0) + 1)
-    }
-    return Array.from(dict.entries()).map(([name, value]) => ({ name, value }))
-  }, [items])
-
-  // 需求变更：删去 HR 活跃度卡片（保留相关类型定义无需使用）
+  }, [stats])
 
   return (
-    <div className="space-y-8">
+    <div className="w-full max-w-full space-y-3.5 overflow-hidden">
       {showHeader && (
         <PageHeader
-          icon={<BiBriefcase className="text-2xl" />}
-          title="猎聘投递分析"
-          subtitle="统计分析猎聘平台的岗位投递数据"
-          iconClass="text-white"
-          accentBgClass="bg-orange-500"
-          actions={
-            <div className="flex items-center gap-2">
-              <Button onClick={() => { loadList(1, size); loadStats(); }} size="sm" className="rounded-full bg-gradient-to-r from-teal-500 to-green-500 hover:from-teal-600 hover:to-green-600 text-white px-4">
-                <BiRefresh className="mr-1" /> 刷新
-              </Button>
-              <Button onClick={exportCSV} disabled={exporting} size="sm" className="rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white px-4">
-                <BiDownload className="mr-1" /> 导出CSV
-              </Button>
-            </div>
-          }
+          title="猎聘 投递分析"
+          subtitle="统计分析猎聘平台的岗位抓取、薪资分布与投递进度"
+          icon={<BiBarChart className="text-xl" />}
         />
       )}
 
-      {/* KPI */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        {kpiCards.map((k) => (
-          <Card key={k.title} className="border-white/20">
-            <CardContent className="pt-6">
-              <p className="text-sm font-medium text-muted-foreground mb-1">{k.title}</p>
-              <p className="text-3xl font-bold text-primary">{k.value}</p>
-            </CardContent>
-          </Card>
+      {/* 紧凑 KPI 指标条 */}
+      <div className="grid grid-cols-2 md:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-slate-100 dark:divide-neutral-800 bg-white dark:bg-neutral-900 rounded-xl border border-slate-200/80 dark:border-neutral-800 shadow-xs">
+        {kpiCards.map((c, idx) => (
+          <div key={idx} className="px-3.5 py-2.5">
+            <div className="text-[11px] font-medium text-slate-500 dark:text-neutral-400 truncate">{c.title}</div>
+            <div className={`text-lg font-bold tracking-tight mt-0.5 ${c.color}`}>{c.value}</div>
+          </div>
         ))}
       </div>
 
-      {/* 筛选区域 */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">筛选条件</CardTitle>
-          <CardDescription>根据状态、地区、经验、学历、薪资区间与关键词筛选</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <Label className="block mb-1">状态</Label>
-              <div className="flex flex-wrap gap-2">
-                {statusOptions.map((s) => (
-                  <label key={s} className="inline-flex items-center gap-1 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={statuses.includes(s)}
-                      onChange={(e) => {
-                        setStatuses((prev) => e.target.checked ? [...prev, s] : prev.filter((x) => x !== s))
-                      }}
-                    />
-                    {s}
-                  </label>
-                ))}
+      {/* 选项卡式图表区 (可按需展开/收起) */}
+      {showCharts && (
+        <div className="p-4 rounded-xl bg-white dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 shadow-xs animate-in fade-in duration-200">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3 pb-2.5 border-b border-slate-100 dark:border-neutral-800">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-slate-700 dark:text-neutral-300">透视维度：</span>
+              <div className="flex rounded-md bg-slate-100 dark:bg-neutral-800 p-0.5 text-xs">
+                <button
+                  onClick={() => setChartTab("overview")}
+                  className={`px-2.5 py-0.5 rounded text-xs font-medium transition-all ${
+                    chartTab === "overview"
+                      ? "bg-white dark:bg-neutral-700 text-blue-600 dark:text-blue-400 shadow-xs"
+                      : "text-slate-600 dark:text-neutral-400"
+                  }`}
+                >
+                  状态与薪资
+                </button>
+                <button
+                  onClick={() => setChartTab("companies")}
+                  className={`px-2.5 py-0.5 rounded text-xs font-medium transition-all ${
+                    chartTab === "companies"
+                      ? "bg-white dark:bg-neutral-700 text-blue-600 dark:text-blue-400 shadow-xs"
+                      : "text-slate-600 dark:text-neutral-400"
+                  }`}
+                >
+                  行业与企业 TOP10
+                </button>
+                <button
+                  onClick={() => setChartTab("dimensions")}
+                  className={`px-2.5 py-0.5 rounded text-xs font-medium transition-all ${
+                    chartTab === "dimensions"
+                      ? "bg-white dark:bg-neutral-700 text-blue-600 dark:text-blue-400 shadow-xs"
+                      : "text-slate-600 dark:text-neutral-400"
+                  }`}
+                >
+                  学历与经验分布
+                </button>
               </div>
             </div>
+            <button
+              onClick={() => setShowCharts(false)}
+              className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-neutral-300 transition-colors"
+            >
+              收起图表 ▲
+            </button>
+          </div>
+
+          {/* 图表内容 */}
+          {chartTab === "overview" && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <div className="text-xs font-semibold text-slate-700 dark:text-neutral-300 mb-1.5 flex items-center gap-1">
+                  <BiPieChart className="text-blue-500" /> 投递状态分布
+                </div>
+                {stats ? (
+                  <ChartCanvas
+                    type="pie"
+                    labels={stats.charts.byStatus.map((x) => x.name)}
+                    data={stats.charts.byStatus.map((x) => x.value)}
+                    colors={["#10b981", "#64748b"]}
+                  />
+                ) : (
+                  <div className="h-44 flex items-center justify-center text-xs text-slate-400">加载图表中...</div>
+                )}
+              </div>
+              <div>
+                <div className="text-xs font-semibold text-slate-700 dark:text-neutral-300 mb-1.5 flex items-center gap-1">
+                  <BiLineChart className="text-rose-500" /> 薪资区间分布 (K)
+                </div>
+                {stats ? (
+                  <ChartCanvas
+                    type="line"
+                    labels={stats.charts.salaryBuckets.map((x) => x.bucket)}
+                    data={stats.charts.salaryBuckets.map((x) => x.value)}
+                    color="#ef4444"
+                  />
+                ) : (
+                  <div className="h-44 flex items-center justify-center text-xs text-slate-400">加载图表中...</div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {chartTab === "companies" && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <div className="text-xs font-semibold text-slate-700 dark:text-neutral-300 mb-1.5 flex items-center gap-1">
+                  <BiBarChart className="text-indigo-500" /> 行业招聘岗位数 TOP10
+                </div>
+                {stats ? (
+                  <ChartCanvas
+                    type="bar"
+                    labels={(stats.charts.byIndustry || []).map((x) => x.name)}
+                    data={(stats.charts.byIndustry || []).map((x) => x.value)}
+                    colors={CATEGORY_COLORS}
+                  />
+                ) : (
+                  <div className="h-44 flex items-center justify-center text-xs text-slate-400">加载图表中...</div>
+                )}
+              </div>
+              <div>
+                <div className="text-xs font-semibold text-slate-700 dark:text-neutral-300 mb-1.5 flex items-center gap-1">
+                  <BiBuilding className="text-emerald-500" /> 企业招聘岗位数 TOP10
+                </div>
+                {stats ? (
+                  <ChartCanvas
+                    type="bar"
+                    labels={(stats.charts.byCompany || []).map((x) => x.name)}
+                    data={(stats.charts.byCompany || []).map((x) => x.value)}
+                    colors={CATEGORY_COLORS}
+                  />
+                ) : (
+                  <div className="h-44 flex items-center justify-center text-xs text-slate-400">加载图表中...</div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {chartTab === "dimensions" && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <div className="text-xs font-semibold text-slate-700 dark:text-neutral-300 mb-1.5 flex items-center gap-1">
+                  <BiBarChart className="text-amber-500" /> 工作经验要求分布
+                </div>
+                {stats ? (
+                  <ChartCanvas
+                    type="bar"
+                    labels={(stats.charts.byExperience || []).map((x) => x.name)}
+                    data={(stats.charts.byExperience || []).map((x) => x.value)}
+                    colors={CATEGORY_COLORS}
+                  />
+                ) : (
+                  <div className="h-44 flex items-center justify-center text-xs text-slate-400">加载图表中...</div>
+                )}
+              </div>
+              <div>
+                <div className="text-xs font-semibold text-slate-700 dark:text-neutral-300 mb-1.5 flex items-center gap-1">
+                  <BiBarChart className="text-purple-500" /> 学历要求门槛分布
+                </div>
+                {stats ? (
+                  <ChartCanvas
+                    type="bar"
+                    labels={(stats.charts.byDegree || []).map((x) => x.name)}
+                    data={(stats.charts.byDegree || []).map((x) => x.value)}
+                    colors={CATEGORY_COLORS}
+                  />
+                ) : (
+                  <div className="h-44 flex items-center justify-center text-xs text-slate-400">加载图表中...</div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 紧凑工具栏与筛选控制 */}
+      <div className="p-3 rounded-xl bg-white dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 shadow-xs space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {/* 搜索与快捷状态过滤 */}
+          <div className="flex flex-wrap items-center gap-1.5 flex-1 min-w-[280px]">
+            <div className="relative w-48 sm:w-60">
+              <Input
+                className="h-8 text-xs pl-8"
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+                placeholder="搜索公司、岗位或HR..."
+              />
+              <BiSearch className="absolute left-2.5 top-2.5 text-slate-400 text-xs pointer-events-none" />
+            </div>
+
+            {statusOptions.map((s) => {
+              const checked = statuses.includes(s)
+              return (
+                <button
+                  key={s}
+                  onClick={() => {
+                    setStatuses(checked ? statuses.filter(x => x !== s) : [...statuses, s])
+                  }}
+                  className={`px-2 py-1 rounded-md text-xs font-medium border transition-colors ${
+                    checked
+                      ? "bg-blue-50 dark:bg-blue-900/40 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300 font-bold"
+                      : "bg-slate-50 dark:bg-neutral-800/80 border-slate-200 dark:border-neutral-700 text-slate-600 dark:text-neutral-400 hover:bg-slate-100"
+                  }`}
+                >
+                  {s}
+                </button>
+              )
+            })}
+
+            <button
+              onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+              className="px-2 py-1 rounded-md text-xs font-medium text-slate-500 hover:text-slate-800 dark:hover:text-neutral-200 transition-colors flex items-center gap-0.5"
+            >
+              更多条件 {showAdvancedFilters ? "▲" : "▼"}
+            </button>
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            <Button
+              size="sm"
+              onClick={async () => {
+                await loadList(1, size)
+                await loadStats()
+              }}
+              disabled={loadingList}
+              className="text-xs h-8 px-3"
+            >
+              <BiFilter className="mr-1" /> 筛选
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={exportCSV}
+              disabled={exporting}
+              className="text-xs h-8 px-2.5"
+            >
+              <BiDownload className="mr-1" /> 导出
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onReload}
+              disabled={reloading}
+              className="text-xs h-8 px-2"
+              title="刷新数据"
+            >
+              <BiRefresh className="text-sm" />
+            </Button>
+            <Button
+              variant={showCharts ? "secondary" : "outline"}
+              size="sm"
+              onClick={() => setShowCharts(!showCharts)}
+              className="text-xs h-8 px-2.5"
+            >
+              <BiBarChart className="mr-1" /> {showCharts ? "收起图表" : "展开图表"}
+            </Button>
+          </div>
+        </div>
+
+        {/* 可折叠高级过滤 */}
+        {showAdvancedFilters && (
+          <div className="pt-2.5 border-t border-slate-100 dark:border-neutral-800 grid grid-cols-2 md:grid-cols-5 gap-2.5 text-xs animate-in fade-in duration-150">
             <div>
-              <Label htmlFor="location">城市</Label>
-              <Input id="location" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="例如：北京" />
+              <Label className="text-[11px] text-slate-500 mb-1 block">城市</Label>
+              <Input
+                className="h-7 text-xs"
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+                placeholder="如：北京/上海"
+              />
             </div>
             <div>
-              <Label htmlFor="keyword">关键词</Label>
-              <Input id="keyword" value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="公司/岗位/HR" />
-            </div>
-            <div>
-              <Label htmlFor="experience">经验</Label>
-              <Select id="experience" value={experience} onChange={(e) => setExperience(e.target.value)}>
+              <Label className="text-[11px] text-slate-500 mb-1 block">经验要求</Label>
+              <Select
+                className="h-7 text-xs"
+                value={experience}
+                onChange={(e) => setExperience(e.target.value)}
+              >
                 <option value="">不限</option>
                 <option value="应届">应届</option>
                 <option value="1-3年">1-3年</option>
@@ -598,262 +656,269 @@ export default function AnalysisContent({ showHeader = false }: { showHeader?: b
               </Select>
             </div>
             <div>
-              <Label htmlFor="degree">学历</Label>
-              <Select id="degree" value={degree} onChange={(e) => setDegree(e.target.value)}>
-                <option value="">不限</option>
-                <option value="大专">大专</option>
-                <option value="本科">本科</option>
-                <option value="硕士">硕士</option>
-                <option value="博士">博士</option>
-              </Select>
+              <Label className="text-[11px] text-slate-500 mb-1 block">学历要求</Label>
+              <Input
+                className="h-7 text-xs"
+                value={degree}
+                onChange={(e) => setDegree(e.target.value)}
+                placeholder="如：本科/硕士"
+              />
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <Label htmlFor="minK">最低K</Label>
-                <Input id="minK" value={minK} onChange={(e) => setMinK(e.target.value)} placeholder="如：15" />
-              </div>
-              <div>
-                <Label htmlFor="maxK">最高K</Label>
-                <Input id="maxK" value={maxK} onChange={(e) => setMaxK(e.target.value)} placeholder="如：30" />
-              </div>
+            <div>
+              <Label className="text-[11px] text-slate-500 mb-1 block">最低月薪(K)</Label>
+              <Input
+                className="h-7 text-xs"
+                type="number"
+                value={minK}
+                onChange={(e) => setMinK(e.target.value)}
+                placeholder="10"
+              />
+            </div>
+            <div>
+              <Label className="text-[11px] text-slate-500 mb-1 block">最高月薪(K)</Label>
+              <Input
+                className="h-7 text-xs"
+                type="number"
+                value={maxK}
+                onChange={(e) => setMaxK(e.target.value)}
+                placeholder="35"
+              />
             </div>
           </div>
-          <div className="mt-4 flex items-center gap-2">
-            <Button onClick={() => { loadList(1, size); loadStats(); }} className="rounded-full bg-gradient-to-r from-teal-500 to-green-500 hover:from-teal-600 hover:to-green-600 text-white px-4">
-              <BiRefresh className="mr-1" /> 应用筛选
-            </Button>
-            <Button onClick={exportCSV} disabled={exporting} className="rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white px-4">
-              <BiDownload className="mr-1" /> 导出CSV
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* 图表 */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2"><BiBarChart className="text-primary" />按城市</CardTitle>
-            <CardDescription>热门城市岗位数排行</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ChartCanvas type="bar" title="按城市" labels={(stats?.charts?.byCity || []).map(x => x.name)} data={(stats?.charts?.byCity || []).map(x => x.value)} colors={CATEGORY_COLORS} />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2"><BiPieChart className="text-primary" />按公司</CardTitle>
-            <CardDescription>公司维度分布</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ChartCanvas type="pie" title="按公司" labels={(stats?.charts?.byCompany || []).map(x => x.name)} data={(stats?.charts?.byCompany || []).map(x => x.value)} colors={CATEGORY_COLORS} />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2"><BiBarChart className="text-primary" />按行业</CardTitle>
-            <CardDescription>行业维度分布</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ChartCanvas type="bar" title="按行业" labels={(stats?.charts?.byIndustry || []).map(x => x.name)} data={(stats?.charts?.byIndustry || []).map(x => x.value)} colors={CATEGORY_COLORS} />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2"><BiLineChart className="text-primary" />经验趋势</CardTitle>
-            <CardDescription>不同经验要求的岗位量（折线）</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {(() => {
-              const arr = (stats?.charts?.byExperience && stats.charts.byExperience.length > 0)
-                ? stats.charts.byExperience
-                : fallbackByExperience
-              return <ChartCanvas type="line" title="经验趋势" labels={arr.map(x => x.name)} data={arr.map(x => x.value)} color="#3b82f6" />
-            })()}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2"><BiBarChart className="text-primary" />薪资分布</CardTitle>
-            <CardDescription>中位数K的分布桶</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {(() => {
-              const apiBuckets = stats?.charts?.salaryBuckets || []
-              const apiSum = apiBuckets.reduce((a, b) => a + (b?.value || 0), 0)
-              const buckets = (apiBuckets.length > 0 && apiSum > 0)
-                ? apiBuckets
-                : (computedSalaryBuckets.length ? computedSalaryBuckets : fallbackSalaryBuckets)
-              const labels = buckets.map(x => x.bucket)
-              const data = buckets.map(x => x.value)
-              return <ChartCanvas type="bar" title="薪资分布" labels={labels} data={data} colors={CATEGORY_COLORS} />
-            })()}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2"><BiPieChart className="text-primary" />按状态</CardTitle>
-            <CardDescription>已投递与未投递占比</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ChartCanvas type="pie" title="按状态" labels={(stats?.charts?.byStatus || []).map(x => x.name)} data={(stats?.charts?.byStatus || []).map(x => x.value)} colors={["#10b981", "#64748b"]} />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2"><BiBarChart className="text-primary" />按经验</CardTitle>
-            <CardDescription>经验要求的分布</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {(() => {
-              const arr = (stats?.charts?.byExperience && stats.charts.byExperience.length > 0)
-                ? stats.charts.byExperience
-                : fallbackByExperience
-              return <ChartCanvas type="bar" title="按经验" labels={arr.map(x => x.name)} data={arr.map(x => x.value)} colors={CATEGORY_COLORS} />
-            })()}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2"><BiBarChart className="text-primary" />按学历</CardTitle>
-            <CardDescription>学历要求的分布</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {(() => {
-              const arr = (stats?.charts?.byDegree && stats.charts.byDegree.length > 0)
-                ? stats.charts.byDegree
-                : fallbackByDegree
-              return <ChartCanvas type="bar" title="按学历" labels={arr.map(x => x.name)} data={arr.map(x => x.value)} colors={CATEGORY_COLORS} />
-            })()}
-          </CardContent>
-        </Card>
-        {/* 已按需求移除 HR 活跃度图表卡片 */}
+        )}
       </div>
 
-      {/* 列表 */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">岗位列表</CardTitle>
-          <CardDescription>按筛选条件展示猎聘岗位数据</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto max-h-[560px] overflow-y-auto">
-            <table className="min-w-full text-sm table-fixed">
-              <thead>
-                <tr className="text-left">
-                  <th className="py-2 px-3 w-64">公司</th>
-                  <th className="py-2 px-3 w-[28rem]">岗位</th>
-                  <th className="py-2 px-3">薪资</th>
-                  <th className="py-2 px-3">城市</th>
-                  <th className="py-2 px-3">经验</th>
-                  <th className="py-2 px-3">学历</th>
-                  <th className="py-2 px-3">HR</th>
-                  <th className="py-2 px-3">状态</th>
-                  <th className="py-2 px-3">链接</th>
-                  <th className="py-2 px-3">创建时间</th>
+      {/* 岗位数据表格 (响应式排版 + 弹窗详情) */}
+      <div className="rounded-xl bg-white dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 shadow-xs overflow-hidden">
+        <div className="p-3 border-b border-slate-100 dark:border-neutral-800 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BiBriefcase className="text-blue-600" />
+            <span className="font-bold text-xs text-slate-900 dark:text-white">猎聘岗位数据列表</span>
+            <span className="text-[11px] text-slate-400">（共 {total} 个匹配岗位）</span>
+          </div>
+        </div>
+
+        <div className="w-full overflow-x-auto">
+          <table className="w-full text-xs text-left">
+            <thead className="bg-slate-50 dark:bg-neutral-800/60 text-slate-600 dark:text-neutral-400 font-semibold border-b border-slate-200/80 dark:border-neutral-800">
+              <tr>
+                <th className="px-3.5 py-2.5 min-w-[160px]">公司名称</th>
+                <th className="px-3.5 py-2.5 min-w-[180px]">招聘岗位</th>
+                <th className="px-3.5 py-2.5 min-w-[110px]">薪资与地点</th>
+                <th className="px-3.5 py-2.5 min-w-[120px]">HR 与职位</th>
+                <th className="px-3.5 py-2.5 min-w-[90px]">投递状态</th>
+                <th className="px-3.5 py-2.5 text-right min-w-[100px]">操作</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-neutral-800">
+              {loadingList ? (
+                <tr>
+                  <td colSpan={6} className="px-4 py-12 text-center text-slate-400 text-xs">
+                    正在查询岗位数据...
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {(items || []).map((it) => (
-                  <tr key={it.jobId} className="border-t border-white/10">
-                    <td className="py-2 px-3 whitespace-nowrap">
-                      <div className="font-medium max-w-[16rem] truncate" title={it.compName || ""}>{it.compName || ""}</div>
-                      <div className="text-xs text-muted-foreground">{it.compIndustry || ""}</div>
+              ) : items.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-4 py-12 text-center text-slate-400 text-xs">
+                    暂无符合条件的岗位记录
+                  </td>
+                </tr>
+              ) : (
+                items.map((it) => (
+                  <tr
+                    key={it.jobId}
+                    className="hover:bg-slate-50/80 dark:hover:bg-neutral-800/40 transition-colors"
+                  >
+                    {/* 公司 */}
+                    <td className="px-3.5 py-2.5 align-top">
+                      <div className="font-bold text-slate-900 dark:text-white text-xs">
+                        {it.compName || "-"}
+                      </div>
+                      <div className="flex flex-wrap gap-1 mt-1 text-[10px] text-slate-400">
+                        {it.compIndustry && <span>{it.compIndustry}</span>}
+                        {it.compScale && <span>• {it.compScale}</span>}
+                      </div>
                     </td>
-                    <td className="py-2 px-3">
-                      <button className="text-left w-full">
-                        <div className="font-medium max-w-[28rem] truncate" title={it.jobTitle || ""} onClick={() => setDetailJob(it)}>{it.jobTitle || ""}</div>
-                      </button>
+
+                    {/* 岗位 */}
+                    <td className="px-3.5 py-2.5 align-top">
+                      <div className="font-bold text-blue-600 dark:text-blue-400 text-xs">
+                        {it.jobTitle || "-"}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 mt-1">
+                        {it.jobExpReq && (
+                          <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-neutral-800 text-[10px] text-slate-600 dark:text-neutral-400">
+                            {it.jobExpReq}
+                          </span>
+                        )}
+                        {it.jobEduReq && (
+                          <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-neutral-800 text-[10px] text-slate-600 dark:text-neutral-400">
+                            {it.jobEduReq}
+                          </span>
+                        )}
+                      </div>
                     </td>
-                    <td className="py-2 px-3 whitespace-nowrap">{it.jobSalaryText || ""}</td>
-                    <td className="py-2 px-3 whitespace-nowrap">{it.jobArea || ""}</td>
-                    <td className="py-2 px-3 whitespace-nowrap">{it.jobExpReq || ""}</td>
-                    <td className="py-2 px-3 whitespace-nowrap">{it.jobEduReq || ""}</td>
-                    <td className="py-2 px-3 whitespace-nowrap">{it.hrName || ""}</td>
-                    <td className="py-2 px-3 whitespace-nowrap">
-                      <span className={badgeClass("delivery", it.delivered === 1 ? "已投递" : "未投递")}>{it.delivered === 1 ? "已投递" : "未投递"}</span>
+
+                    {/* 薪资地点 */}
+                    <td className="px-3.5 py-2.5 align-top">
+                      <div className="font-bold text-amber-600 dark:text-amber-400">
+                        {it.jobSalaryText || "-"}
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-0.5">
+                        <BiMapPin className="text-slate-400" /> {it.jobArea || "-"}
+                      </div>
                     </td>
-                    <td className="py-2 px-3 whitespace-nowrap">
-                      {it.jobLink ? (
-                        <a href={it.jobLink} target="_blank" rel="noreferrer" className="text-primary hover:underline">打开</a>
-                      ) : (
-                        <span className="text-muted-foreground">-</span>
+
+                    {/* HR */}
+                    <td className="px-3.5 py-2.5 align-top">
+                      <div className="text-slate-700 dark:text-neutral-300 font-medium">
+                        {it.hrName || "HR"}
+                      </div>
+                      {it.hrTitle && (
+                        <div className="text-[10px] text-slate-400 mt-0.5">
+                          {it.hrTitle}
+                        </div>
                       )}
                     </td>
-                    <td className="py-2 px-3 whitespace-nowrap">{formatDateOnly(it.createTime)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
 
-          {/* 详情弹层 */}
-          {typeof detailJob !== "undefined" && detailJob && (
-            <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setDetailJob(null)}>
-              <div className="bg-white dark:bg-neutral-900 rounded-lg shadow-xl w-[800px] max-w-[90vw] p-6" onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-semibold">岗位详情</h3>
-                  <Button className="rounded-full bg-white/10" onClick={() => setDetailJob(null)}>关闭</Button>
+                    {/* 状态 */}
+                    <td className="px-3.5 py-2.5 align-top">
+                      <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                        it.delivered === 1
+                          ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+                          : "bg-slate-100 text-slate-700 dark:bg-neutral-800 dark:text-neutral-300"
+                      }`}>
+                        {it.delivered === 1 ? "已投递" : "未投递"}
+                      </span>
+                    </td>
+
+                    {/* 操作 */}
+                    <td className="px-3.5 py-2.5 align-top text-right space-x-2 whitespace-nowrap">
+                      <button
+                        onClick={() => setDetailJob(it)}
+                        className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline"
+                      >
+                        详情
+                      </button>
+                      {it.jobLink && (
+                        <a
+                          href={it.jobLink}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-xs text-slate-400 hover:text-slate-600 inline-flex items-center gap-0.5"
+                        >
+                          链接 <BiLinkExternal />
+                        </a>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* 表格底部翻页 */}
+        <div className="p-4 border-t border-slate-100 dark:border-neutral-800 flex items-center justify-between text-xs text-slate-500 dark:text-neutral-400">
+          <div>共 {total} 条数据，每页 {size} 条</div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => loadList(page - 1, size)}
+              disabled={page <= 1}
+              className="p-1.5 rounded border border-slate-200 dark:border-neutral-700 disabled:opacity-40"
+            >
+              <BiChevronLeft className="text-base" />
+            </button>
+            <span>第 {page} 页 / 共 {Math.ceil(total / size) || 1} 页</span>
+            <button
+              onClick={() => loadList(page + 1, size)}
+              disabled={page * size >= total}
+              className="p-1.5 rounded border border-slate-200 dark:border-neutral-700 disabled:opacity-40"
+            >
+              <BiChevronRight className="text-base" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* 详情弹窗 */}
+      {detailJob && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-xl p-6 rounded-xl bg-white dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 shadow-2xl max-h-[85vh] overflow-y-auto">
+            <div className="flex items-start justify-between pb-3 border-b border-slate-100 dark:border-neutral-800 mb-4">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  {detailJob.jobTitle}
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {detailJob.compName} | {detailJob.jobSalaryText} | {detailJob.jobArea}
+                </p>
+              </div>
+              <button
+                onClick={() => setDetailJob(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+              >
+                <BiX className="text-2xl" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-3 rounded-xl bg-slate-50 dark:bg-neutral-800/40">
+                <div>
+                  <span className="text-slate-400 block text-[10px]">经验要求</span>
+                  <span className="font-semibold text-slate-700 dark:text-neutral-300">{detailJob.jobExpReq || "不限"}</span>
                 </div>
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div><span className="text-muted-foreground">公司：</span>{detailJob.compName || ""}</div>
-                  <div><span className="text-muted-foreground">行业：</span>{detailJob.compIndustry || ""}</div>
-                  <div><span className="text-muted-foreground">岗位：</span>{detailJob.jobTitle || ""}</div>
-                  <div><span className="text-muted-foreground">薪资：</span>{detailJob.jobSalaryText || ""}</div>
-                  <div><span className="text-muted-foreground">城市：</span>{detailJob.jobArea || ""}</div>
-                  <div><span className="text-muted-foreground">经验：</span>{detailJob.jobExpReq || ""}</div>
-                  <div><span className="text-muted-foreground">学历：</span>{detailJob.jobEduReq || ""}</div>
-                  <div><span className="text-muted-foreground">HR：</span>{detailJob.hrName || ""}</div>
-                  <div><span className="text-muted-foreground">状态：</span>{detailJob.delivered === 1 ? "已投递" : "未投递"}</div>
-                  <div><span className="text-muted-foreground">创建时间：</span>{formatDateOnly(detailJob.createTime)}</div>
+                <div>
+                  <span className="text-slate-400 block text-[10px]">学历要求</span>
+                  <span className="font-semibold text-slate-700 dark:text-neutral-300">{detailJob.jobEduReq || "不限"}</span>
                 </div>
-                <div className="mt-4">
-                  {detailJob.jobLink ? (
-                    <a href={detailJob.jobLink} target="_blank" rel="noreferrer" className="text-primary hover:underline">打开职位链接</a>
-                  ) : (
-                    <span className="text-muted-foreground">暂无链接</span>
-                  )}
+                <div>
+                  <span className="text-slate-400 block text-[10px]">所属行业</span>
+                  <span className="font-semibold text-slate-700 dark:text-neutral-300">{detailJob.compIndustry || "未填写"}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px]">企业规模</span>
+                  <span className="font-semibold text-slate-700 dark:text-neutral-300">{detailJob.compScale || "未填写"}</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 p-3 rounded-xl bg-slate-50 dark:bg-neutral-800/40">
+                <div>
+                  <span className="text-slate-400 block text-[10px]">招聘人员 (HR)</span>
+                  <span className="font-semibold text-slate-700 dark:text-neutral-300">
+                    {detailJob.hrName || "未注明"} {detailJob.hrTitle ? `(${detailJob.hrTitle})` : ""}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px]">抓取入库时间</span>
+                  <span className="font-semibold text-slate-700 dark:text-neutral-300">
+                    {formatDateOnly(detailJob.createTime) || "未知"}
+                  </span>
                 </div>
               </div>
             </div>
-          )}
 
-          {/* 分页 */}
-          <div className="mt-4 flex items-center gap-2">
-            <Label className="text-sm">页码</Label>
-            <Input
-              value={inputPage}
-              onChange={(e) => setInputPage(e.target.value)}
-              onBlur={() => {
-                const v = Number(inputPage)
-                if (!isNaN(v) && v > 0) { setPage(v); loadList(v, size) }
-                else setInputPage(page)
-              }}
-              className="w-20"
-            />
-            <Label className="text-sm">每页</Label>
-            <Input
-              value={inputSize}
-              onChange={(e) => setInputSize(e.target.value)}
-              onBlur={() => {
-                const v = Number(inputSize)
-                if (!isNaN(v) && v > 0) { setSize(v); loadList(page, v) }
-                else setInputSize(size)
-              }}
-              className="w-20"
-            />
-            <span className="text-sm text-muted-foreground">共 {total} 条</span>
-            <div className="ml-auto flex items-center gap-2">
-              <Button onClick={() => loadList(page - 1 > 0 ? page - 1 : 1, size)} disabled={loadingList || page <= 1} className="rounded-full bg-white/10">
-                上一页
-              </Button>
-              <Button onClick={() => loadList(page + 1, size)} disabled={loadingList || items.length < size} className="rounded-full bg-white/10">
-                下一页
-              </Button>
+            <div className="mt-6 pt-3 border-t border-slate-100 dark:border-neutral-800 flex items-center justify-between">
+              {detailJob.jobLink ? (
+                <a
+                  href={detailJob.jobLink}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+                >
+                  在猎聘平台打开原始岗位链接 <BiLinkExternal />
+                </a>
+              ) : <div />}
+              <button
+                onClick={() => setDetailJob(null)}
+                className="px-4 py-2 rounded-lg bg-slate-100 dark:bg-neutral-800 text-xs font-semibold text-slate-700 dark:text-neutral-300"
+              >
+                关闭
+              </button>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      )}
     </div>
   )
 }

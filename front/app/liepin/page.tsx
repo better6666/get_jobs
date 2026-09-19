@@ -46,6 +46,38 @@ export default function LiepinPage() {
   const [isCustomCity, setIsCustomCity] = useState(false) // 是否手动输入城市
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [isDelivering, setIsDelivering] = useState(false)
+  const [isStopping, setIsStopping] = useState(false)
+  const [isQueued, setIsQueued] = useState(false)
+
+  // 每3秒同步后端真实投递/排队状态：按钮显示以服务端为准，页面过期或SSE断线也不会错乱
+  useEffect(() => {
+    const syncStatus = async () => {
+      try {
+        const [statusRes, queueRes] = await Promise.all([
+          fetch(`${API_BASE}/api/liepin/status`),
+          fetch(`${API_BASE}/api/delivery/queue`),
+        ])
+        let running = false
+        let queuedFlag = false
+        if (statusRes.ok) {
+          const d = await statusRes.json()
+          running = !!d.isRunning
+        }
+        if (queueRes.ok) {
+          const q = await queueRes.json()
+          queuedFlag = !!(q.data && q.data.liepin)
+        }
+        setIsDelivering(running)
+        if (!running) setIsStopping(false)
+        setIsQueued(queuedFlag && !running)
+      } catch {
+        // 后端暂时不可达时保持当前显示，下个周期重试
+      }
+    }
+    syncStatus()
+    const timer = setInterval(syncStatus, 3000)
+    return () => clearInterval(timer)
+  }, [])
   const [checkingLogin, setCheckingLogin] = useState(true)
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const [showLogoutResultDialog, setShowLogoutResultDialog] = useState(false)
@@ -225,7 +257,7 @@ export default function LiepinPage() {
 
       if (data.success) {
         // 停止成功：不弹框
-        setIsDelivering(false)
+        setIsStopping(true)
       } else {
         // 停止失败：不弹框
         console.warn('停止失败：', data.message)
@@ -268,31 +300,39 @@ export default function LiepinPage() {
         icon={<BiSearch className="text-2xl" />}
         title="猎聘配置"
         subtitle="配置猎聘平台的求职参数"
-        iconClass="text-white"
-        accentBgClass="bg-purple-500"
+        
+        iconClass="text-purple-600 dark:text-purple-400" accentBgClass="bg-purple-50 dark:bg-purple-900/20"
         actions={
           <div className="flex items-center gap-2">
             {checkingLogin ? (
-              <Button size="sm" disabled className="rounded-full bg-gray-300 text-gray-600 cursor-not-allowed px-4 shadow">
+              <Button size="sm" disabled variant="secondary">
                 <BiPlay className="mr-1" /> 检查登录中...
               </Button>
             ) : !isLoggedIn ? (
-              <Button size="sm" disabled className="rounded-full bg-gray-300 text-gray-600 cursor-not-allowed px-4 shadow">
+              <Button size="sm" disabled variant="secondary">
                 <BiPlay className="mr-1" /> 请先登录猎聘
               </Button>
+            ) : isStopping ? (
+              <Button size="sm" disabled variant="secondary">
+                停止中...
+              </Button>
             ) : isDelivering ? (
-              <Button onClick={handleStopDelivery} size="sm" className="rounded-full bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+              <Button onClick={handleStopDelivery} size="sm" variant="destructive">
                 <BiStop className="mr-1" /> 停止投递
               </Button>
+            ) : isQueued ? (
+              <Button size="sm" disabled className="bg-amber-500 hover:bg-amber-600 text-white">
+                <BiPlay className="mr-1" /> 排队中…
+              </Button>
             ) : (
-              <Button onClick={handleStartDelivery} size="sm" className="rounded-full bg-gradient-to-r from-teal-500 to-green-500 hover:from-teal-600 hover:to-green-600 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+              <Button onClick={handleStartDelivery} size="sm">
                 <BiPlay className="mr-1" /> 开始投递
               </Button>
             )}
-            <Button onClick={() => setShowLogoutDialog(true)} size="sm" className="rounded-full bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+            <Button onClick={() => setShowLogoutDialog(true)} size="sm" variant="outline" className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30">
               <BiLogOut className="mr-1" /> 退出登录
             </Button>
-            <Button onClick={handleSave} size="sm" className="rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+            <Button onClick={handleSave} size="sm">
               <BiSave className="mr-1" /> 保存配置
             </Button>
           </div>
@@ -300,7 +340,7 @@ export default function LiepinPage() {
       />
 
       <Tabs defaultValue="config" className="w-full">
-        <TabsList className="grid w-full grid-cols-2">
+        <TabsList className="mb-2">
           <TabsTrigger value="config">平台配置</TabsTrigger>
           <TabsTrigger value="analytics">投递分析</TabsTrigger>
         </TabsList>
@@ -426,7 +466,7 @@ export default function LiepinPage() {
       {/* 退出确认弹框 */}
       {showLogoutDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white dark:bg-neutral-900 rounded-2xl shadow-2xl w-[92%] max-w-sm border border-gray-200 dark:border-neutral-800 animate-in fade-in zoom-in-95">
+          <div className="bg-white dark:bg-neutral-900 rounded-xl shadow-2xl w-[92%] max-w-sm border border-slate-200/80 dark:border-neutral-800 animate-in fade-in zoom-in-95">
             <Card className="border-0">
               <CardHeader className="pb-2">
                 <CardTitle className="text-lg flex items-center gap-2">
@@ -440,16 +480,15 @@ export default function LiepinPage() {
                   <Button
                     variant="ghost"
                     onClick={() => setShowLogoutDialog(false)}
-                    className="rounded-full px-4"
                   >
                     取消
                   </Button>
                   <Button
+                    variant="destructive"
                     onClick={async () => {
                       await triggerLogout()
                       setShowLogoutDialog(false)
                     }}
-                    className="rounded-full bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white px-4"
                   >
                     确认退出
                   </Button>
@@ -462,11 +501,11 @@ export default function LiepinPage() {
 
       {/* 退出登录结果弹框 */}
       {showLogoutResultDialog && logoutResult && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
-          <div className="bg-white dark:bg-neutral-900 rounded-2xl shadow-2xl w-[92%] max-w-sm border border-gray-200 dark:border-neutral-800 animate-in fade-in zoom-in-95">
-            <Card className="border-0">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs" role="dialog" aria-modal="true">
+          <div className="bg-white dark:bg-neutral-900 rounded-xl shadow-2xl w-[92%] max-w-sm border border-slate-200 dark:border-neutral-800 animate-in fade-in zoom-in-95">
+            <Card className="border-0 shadow-none">
               <CardHeader className="pb-2">
-                <CardTitle className="text-lg flex items-center gap-2">
+                <CardTitle className="text-base flex items-center gap-2">
                   <BiLogOut className={logoutResult.success ? 'text-green-500' : 'text-red-500'} />
                   {logoutResult.success ? '退出登录成功' : '退出登录失败'}
                 </CardTitle>
@@ -476,7 +515,7 @@ export default function LiepinPage() {
                 <div className="flex justify-end gap-2">
                   <Button
                     onClick={() => setShowLogoutResultDialog(false)}
-                    className={`rounded-full px-4 ${logoutResult.success ? 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white' : 'bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white'}`}
+                    variant={logoutResult.success ? "default" : "destructive"}
                   >
                     知道了
                   </Button>
@@ -489,11 +528,11 @@ export default function LiepinPage() {
 
       {/* 保存结果弹框 */}
       {showSaveDialog && saveResult && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
-          <div className="bg-white dark:bg-neutral-900 rounded-2xl shadow-2xl w-[92%] max-w-sm border border-gray-200 dark:border-neutral-800 animate-in fade-in zoom-in-95">
-            <Card className="border-0">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs" role="dialog" aria-modal="true">
+          <div className="bg-white dark:bg-neutral-900 rounded-xl shadow-2xl w-[92%] max-w-sm border border-slate-200 dark:border-neutral-800 animate-in fade-in zoom-in-95">
+            <Card className="border-0 shadow-none">
               <CardHeader className="pb-2">
-                <CardTitle className="text-lg flex items-center gap-2">
+                <CardTitle className="text-base flex items-center gap-2">
                   <BiSave className={saveResult.success ? 'text-green-500' : 'text-red-500'} />
                   {saveResult.success ? '保存成功' : '保存失败'}
                 </CardTitle>
@@ -503,7 +542,7 @@ export default function LiepinPage() {
                 <div className="flex justify-end gap-2">
                   <Button
                     onClick={() => setShowSaveDialog(false)}
-                    className={`rounded-full px-4 ${saveResult.success ? 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white' : 'bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white'}`}
+                    variant={saveResult.success ? "default" : "destructive"}
                   >
                     知道了
                   </Button>

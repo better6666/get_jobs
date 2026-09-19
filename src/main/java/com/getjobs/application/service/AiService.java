@@ -9,6 +9,7 @@ import org.json.JSONObject;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -18,6 +19,8 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * AI 服务（Spring 管理）
@@ -36,17 +39,100 @@ public class AiService {
      * @return AI 回复文本
      */
     public String sendRequest(String content) {
+        // 中转站（Cloudflare 前置）偶发 524/502/503 超时，自动重试最多 3 次
+        RuntimeException lastError = null;
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            try {
+                return doSendRequest(content);
+            } catch (RuntimeException e) {
+                lastError = e;
+                String msg = String.valueOf(e.getMessage());
+                boolean transientError = msg.contains("524") || msg.contains("502") || msg.contains("503")
+                        || msg.contains("504") || msg.contains("timeout") || msg.contains("Timeout");
+                if (transientError && attempt < 3) {
+                    log.warn("AI请求第{}次失败（疑似中转站临时故障，将重试）: {}", attempt, msg.length() > 120 ? msg.substring(0, 120) + "..." : msg);
+                    try {
+                        Thread.sleep(2000L * attempt);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw e;
+                    }
+                    continue;
+                }
+                throw e;
+            }
+        }
+        throw lastError;
+    }
+
+    private String doSendRequest(String content) {
         // 读取并校验配置
         var cfg = configService.getAiConfigs();
         String baseUrl = cfg.get("BASE_URL");
         String apiKey = cfg.get("API_KEY");
         String model = cfg.get("MODEL");
-        // 根据模型类型选择兼容的端点（部分“推理/Reasoning”模型需要使用 Responses API）
+        return sendRequestWithConfig(baseUrl, apiKey, model, content, 60);
+    }
+
+    /**
+     * 测试指定配置的 AI 接口连通性
+     * @param baseUrl API 接口地址（缺省则读配置）
+     * @param apiKey API 密钥（缺省则读配置）
+     * @param model 模型名称（缺省则读配置）
+     * @param testPrompt 测试提示词
+     * @return 包含 success, latencyMs, reply, model, message 等信息的测试结果
+     */
+    public java.util.Map<String, Object> testAiConnection(String baseUrl, String apiKey, String model, String testPrompt) {
+        var cfg = configService.getAiConfigs();
+        String effectiveBaseUrl = (baseUrl != null && !baseUrl.trim().isEmpty()) ? baseUrl.trim() : cfg.get("BASE_URL");
+        String effectiveApiKey = (apiKey != null && !apiKey.trim().isEmpty()) ? apiKey.trim() : cfg.get("API_KEY");
+        String effectiveModel = (model != null && !model.trim().isEmpty()) ? model.trim() : cfg.get("MODEL");
+
+        if (effectiveBaseUrl == null || effectiveBaseUrl.isBlank()) {
+            throw new IllegalArgumentException("API Base URL 不能为空");
+        }
+        if (effectiveApiKey == null || effectiveApiKey.isBlank()) {
+            throw new IllegalArgumentException("API Key 不能为空");
+        }
+        if (effectiveModel == null || effectiveModel.isBlank()) {
+            throw new IllegalArgumentException("AI 模型名称不能为空");
+        }
+
+        String prompt = (testPrompt != null && !testPrompt.trim().isEmpty())
+                ? testPrompt.trim()
+                : "请回复一句简短的自我介绍，用于验证接口连通性（20字以内）。";
+
+        long start = System.currentTimeMillis();
+        String reply = sendRequestWithConfig(effectiveBaseUrl, effectiveApiKey, effectiveModel, prompt, 30);
+        long latencyMs = System.currentTimeMillis() - start;
+
+        java.util.Map<String, Object> result = new java.util.HashMap<>();
+        result.put("success", true);
+        result.put("latencyMs", latencyMs);
+        result.put("reply", reply);
+        result.put("model", effectiveModel);
+        result.put("baseUrl", effectiveBaseUrl);
+        result.put("message", "接口连通成功！模型在 " + latencyMs + "ms 内返回响应。");
+        return result;
+    }
+
+    /**
+     * 指定完整配置发送单次 AI 请求
+     */
+    public String sendRequestWithConfig(String baseUrl, String apiKey, String model, String content, int timeoutInSeconds) {
+        if (baseUrl == null || baseUrl.trim().isEmpty()) {
+            throw new IllegalArgumentException("API Base URL 不能为空");
+        }
+        if (apiKey == null || apiKey.trim().isEmpty()) {
+            throw new IllegalArgumentException("API Key 不能为空");
+        }
+        if (model == null || model.trim().isEmpty()) {
+            throw new IllegalArgumentException("AI 模型名称不能为空");
+        }
+
         String endpoint = isResponsesModel(model)
                 ? buildResponsesEndpoint(baseUrl)
                 : buildChatCompletionsEndpoint(baseUrl);
-
-        int timeoutInSeconds = 60;
 
         HttpClient client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(timeoutInSeconds))
@@ -55,14 +141,11 @@ public class AiService {
         // 构建 JSON 请求体
         JSONObject requestData = new JSONObject();
         requestData.put("model", model);
-        requestData.put("temperature", 0.5);
+        requestData.put("temperature", 0.7);
+        requestData.put("max_tokens", 250);
         if (endpoint.endsWith("/responses")) {
             // Responses API 采用 input 字段
             requestData.put("input", content);
-            // 如需显式控制推理强度，可按需开启：
-            // JSONObject reasoning = new JSONObject();
-            // reasoning.put("effort", "medium");
-            // requestData.put("reasoning", reasoning);
         } else {
             // Chat Completions API 使用 messages
             JSONArray messages = new JSONArray();
@@ -77,6 +160,7 @@ public class AiService {
                 .uri(URI.create(endpoint))
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json")
+                .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
                 .header("Authorization", "Bearer " + apiKey)
                 // 某些服务（例如 Azure OpenAI）需要 api-key 头，额外加一层兼容
                 .header("api-key", apiKey)
@@ -92,28 +176,47 @@ public class AiService {
                 long created = responseObject.optLong("created", 0);
                 String usedModel = responseObject.optString("model");
 
-                String responseContent;
+                String responseContent = null;
                 if (endpoint.endsWith("/responses")) {
                     // Responses API：优先读取 output_text
                     responseContent = responseObject.optString("output_text", null);
                     if (responseContent == null || responseContent.isEmpty()) {
-                        // 兜底：尝试从通用 choices/message 结构读取（部分代理/兼容层会返回该结构）
                         try {
                             JSONObject messageObject = responseObject.getJSONArray("choices")
                                     .getJSONObject(0)
                                     .getJSONObject("message");
-                            responseContent = messageObject.getString("content");
+                            responseContent = messageObject.optString("content", null);
                         } catch (Exception ignore) {
-                            responseContent = response.body(); // 最后兜底：返回原始文本，避免空值
+                            responseContent = response.body();
                         }
                     }
                 } else {
-                    // Chat Completions API
-                    JSONObject messageObject = responseObject.getJSONArray("choices")
-                            .getJSONObject(0)
-                            .getJSONObject("message");
-                    responseContent = messageObject.getString("content");
+                    // Chat Completions API：支持标准 content 与推理模型 reasoning/reasoning_content
+                    try {
+                        JSONArray choices = responseObject.optJSONArray("choices");
+                        if (choices != null && choices.length() > 0) {
+                            JSONObject choice = choices.getJSONObject(0);
+                            JSONObject messageObject = choice.optJSONObject("message");
+                            if (messageObject != null) {
+                                responseContent = messageObject.optString("content", null);
+                                if (responseContent == null || responseContent.isBlank()) {
+                                    responseContent = messageObject.optString("reasoning_content", null);
+                                }
+                                if (responseContent == null || responseContent.isBlank()) {
+                                    responseContent = messageObject.optString("reasoning", null);
+                                }
+                            }
+                        }
+                    } catch (Exception parseEx) {
+                        log.warn("解析 choices.message 失败: {}", parseEx.getMessage());
+                    }
+                    if (responseContent == null || responseContent.isBlank()) {
+                        responseContent = responseObject.optString("output_text", null);
+                    }
                 }
+
+                // 清洗打招呼语文本（去除think标签、前后缀说明、引号）
+                responseContent = cleanAiGreeting(responseContent);
 
                 JSONObject usageObject = responseObject.optJSONObject("usage");
                 int promptTokens = usageObject != null ? usageObject.optInt("prompt_tokens", -1) : -1;
@@ -146,10 +249,155 @@ public class AiService {
         }
     }
 
+    /**
+     * 清洗 AI 生成的打招呼语：移除思考标签、前后缀说明、引号与无效包装
+     */
+    private String cleanAiGreeting(String text) {
+        if (text == null) return null;
+        String s = text.trim();
+        // 1. 去除 <think>...</think> 标签及其内容
+        if (s.contains("<think>")) {
+            s = s.replaceAll("(?s)<think>.*?</think>", "").trim();
+        }
+        // 2. 去除常见的 Markdown 代码块标签
+        if (s.startsWith("```") && s.endsWith("```")) {
+            s = s.replaceAll("^```[a-zA-Z]*\\n?", "").replaceAll("\\n?```$", "").trim();
+        }
+        // 3. 去除常见的前缀标识（如 "打招呼语："、"招呼语：" 等）
+        String[] prefixes = new String[]{
+                "打招呼语：", "打招呼语:", "招呼语：", "招呼语:", "问候语：", "问候语:",
+                "打招呼内容：", "打招呼内容:", "生成的打招呼语：", "求职打招呼语：",
+                "【打招呼语】", "【求职打招呼语】"
+        };
+        for (String p : prefixes) {
+            if (s.startsWith(p)) {
+                s = s.substring(p.length()).trim();
+                break;
+            }
+        }
+        // 4. 去除首尾的双引号或单引号
+        if ((s.startsWith("\"") && s.endsWith("\"")) || (s.startsWith("“") && s.endsWith("”")) || (s.startsWith("'") && s.endsWith("'"))) {
+            s = s.substring(1, s.length() - 1).trim();
+        }
+        return s;
+    }
+
     private String normalizeBaseUrl(String baseUrl) {
         if (baseUrl == null) return "";
         String trimmed = baseUrl.trim();
-        return trimmed.endsWith("/") ? trimmed.substring(0, trimmed.length() - 1) : trimmed;
+        while (trimmed.endsWith("/")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        // 兼容中转站地址：直接粘贴完整端点时自动去掉后半段，统一还原成 base
+        // 如 https://xx.com/v1/chat/completions -> https://xx.com/v1
+        for (String suffix : new String[]{"/chat/completions", "/responses", "/completions", "/models", "/embeddings"}) {
+            if (trimmed.toLowerCase().endsWith(suffix)) {
+                trimmed = trimmed.substring(0, trimmed.length() - suffix.length());
+                break;
+            }
+        }
+        while (trimmed.endsWith("/")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        return trimmed;
+    }
+
+    /**
+     * 使用数据库中已保存的 BASE_URL / API_KEY 拉取模型列表
+     */
+    public List<String> listModels() {
+        var cfg = configService.getAiConfigs();
+        return listModels(cfg.get("BASE_URL"), cfg.get("API_KEY"));
+    }
+
+    /**
+     * 拉取 OpenAI 兼容接口的模型列表（GET /v1/models）
+     * @param baseUrl API 地址，带不带 /v1 均可
+     * @param apiKey  API 密钥
+     * @return 模型 ID 列表（忽略大小写排序）
+     */
+    public List<String> listModels(String baseUrl, String apiKey) {
+        if (baseUrl == null || baseUrl.trim().isEmpty()) {
+            throw new IllegalArgumentException("请先填写 API Base URL");
+        }
+        if (apiKey == null || apiKey.trim().isEmpty()) {
+            throw new IllegalArgumentException("请先填写 API Key");
+        }
+        String normalized = normalizeBaseUrl(baseUrl);
+        String endpoint = (normalized.endsWith("/v1") || normalized.contains("/v1/"))
+                ? normalized + "/models"
+                : normalized + "/v1/models";
+
+        HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(20))
+                .build();
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(endpoint))
+                .header("Accept", "application/json")
+                .header("Authorization", "Bearer " + apiKey.trim())
+                .header("api-key", apiKey.trim())
+                .timeout(Duration.ofSeconds(20))
+                .GET()
+                .build();
+
+        try {
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() == 401) {
+                throw new RuntimeException("API Key 无效或未授权（401），请检查 Key 是否正确、是否已在该中转站生成令牌");
+            }
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new RuntimeException("模型列表请求失败，状态码: " + response.statusCode() + "，详情: " + snippet(response.body()));
+            }
+            String body = response.body();
+            // 中转站可能返回 HTML 页面（地址填错成网页路径时），给出人话提示
+            String head = body == null ? "" : body.trim();
+            if (head.startsWith("<")) {
+                throw new RuntimeException("该地址返回的是网页而不是 API 响应，请检查 Base URL：应填接口地址（如 https://xx.com/v1），不要从浏览器地址栏复制带页面路径的网址。返回内容: " + snippet(body));
+            }
+            JSONObject modelsRoot;
+            if (head.startsWith("[")) {
+                // 部分中转站直接返回数组格式的模型列表
+                modelsRoot = new JSONObject();
+                modelsRoot.put("data", new org.json.JSONArray(head));
+            } else {
+                try {
+                    modelsRoot = new JSONObject(body);
+                } catch (Exception parseError) {
+                    throw new RuntimeException("响应不是有效的 JSON，返回内容: " + snippet(body));
+                }
+            }
+            JSONArray data = modelsRoot.optJSONArray("data");
+            if (data == null) {
+                throw new RuntimeException("响应中没有 data 字段，返回内容: " + snippet(body));
+            }
+            List<String> models = new ArrayList<>();
+            for (int i = 0; i < data.length(); i++) {
+                JSONObject item = data.optJSONObject(i);
+                if (item != null && item.has("id")) {
+                    models.add(item.getString("id"));
+                }
+            }
+            if (models.isEmpty()) {
+                throw new RuntimeException("该 Key 下没有可用模型，请检查 Key 的模型分组/额度");
+            }
+            models.sort(String.CASE_INSENSITIVE_ORDER);
+            return models;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("模型列表请求被中断", e);
+        } catch (IOException e) {
+            throw new RuntimeException("模型列表请求失败（网络异常）: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 截取响应体片段用于错误提示，避免把整个 HTML 页面塞进报错信息
+     */
+    private String snippet(String body) {
+        if (body == null) return "(空响应)";
+        String trimmed = body.trim().replaceAll("\\s+", " ");
+        return trimmed.length() > 150 ? trimmed.substring(0, 150) + "..." : trimmed;
     }
 
     /**
@@ -176,14 +424,13 @@ public class AiService {
     }
 
     /**
-     * 粗略识别需要使用 Responses API 的模型（o-系列、4.1、reasoner 等）
+     * 粗略识别需要使用 Responses API 的模型（部分实验性 o-系列）
      */
     private boolean isResponsesModel(String model) {
         if (model == null) return false;
         String m = model.toLowerCase();
-        return m.contains("o1") || m.contains("o3") || m.contains("o4")
-                || m.contains("4.1") || m.contains("reasoner")
-                || m.contains("4o-mini") || m.contains("gpt-4o-mini");
+        return (m.contains("o1") || m.contains("o3") || m.contains("o4"))
+                && !m.contains("4o-mini") && !m.contains("gpt-4o-mini");
     }
 
     /**
@@ -207,7 +454,7 @@ public class AiService {
 
         JSONObject requestData = new JSONObject();
         requestData.put("model", model);
-        requestData.put("temperature", 0.5);
+        requestData.put("temperature", 0.9);
         requestData.put("input", content);
 
         HttpRequest request = HttpRequest.newBuilder()

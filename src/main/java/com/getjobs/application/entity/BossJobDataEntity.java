@@ -77,6 +77,9 @@ public class BossJobDataEntity {
     @TableField("company_scale")
     private String companyScale;
 
+    /** JD匹配评分（职业规划打分模型） */
+    private Integer matchScore;
+
     @TableField("created_at")
     private LocalDateTime createdAt;
 

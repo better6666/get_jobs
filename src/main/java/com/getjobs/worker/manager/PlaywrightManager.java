@@ -362,6 +362,7 @@ public class PlaywrightManager {
 
             job51Page = context.newPage();
             job51Page.setDefaultTimeout(DEFAULT_TIMEOUT);
+            setupJob51PageGuards(job51Page);
             log.info("✓ 51job Page已创建");
 
             zhilianPage = context.newPage();
@@ -1139,6 +1140,7 @@ public class PlaywrightManager {
                     throw new IllegalStateException("浏览器上下文尚未初始化");
                 }
                 job51Page = context.newPage();
+                setupJob51PageGuards(job51Page);
             }
 
             // 如果已登录则直接返回
@@ -1160,18 +1162,11 @@ public class PlaywrightManager {
                 log.debug("在首页尝试点击登录入口失败: {}", e.getMessage());
             }
 
-            // 跳转到官方登录页
-            String loginUrl = "https://login.51job.com/login.php";
-            job51Page.navigate(loginUrl, new Page.NavigateOptions()
-                .setTimeout(60000)
-                .setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
+            // 等待跳转到登录页面或出现登录弹窗
+            try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
 
-            // 尝试点击“微信扫码登录”按钮
-            Locator wechatScanBtn = job51Page.locator(
-                "i.passIcon.custom-cursor-on-hover[data-sensor-id='sensor_login_wechatScan'], " +
-                "i.passIcon[data-sensor-id='sensor_login_wechatScan'], " +
-                "[data-sensor-id='sensor_login_wechatScan']"
-            ).first();
+            // 优先选择“微信扫码”登录Tab，方便用户直接用手机微信扫码
+            Locator wechatScanBtn = job51Page.locator("div.loginTab:has-text('微信扫码'), span:has-text('微信扫码'), div:has-text('微信扫码')").first();
 
             if (isVisibleQuick(wechatScanBtn)) {
                 wechatScanBtn.click(new Locator.ClickOptions().setTimeout(DEFAULT_TIMEOUT));
@@ -1185,6 +1180,27 @@ public class PlaywrightManager {
             log.error("触发51job登录流程失败: {}", e.getMessage(), e);
             throw new RuntimeException("触发51job登录流程失败", e);
         }
+    }
+
+    /**
+     * 为 51job 页面配置防护策略（禁止应届生/第三方外链网络请求与弹窗）
+     */
+    private void setupJob51PageGuards(Page p) {
+        if (p == null) return;
+        try {
+            p.route("**/*yingjiesheng*/**", Route::abort);
+            p.route("**/*xyz.51job*/**", Route::abort);
+            p.onPopup(popup -> {
+                try {
+                    String u = "";
+                    try { u = popup.url(); } catch (Exception ignored) {}
+                    if (u.contains("yingjiesheng") || u.contains("xyz.51job") || u.contains("partner=51wspcjoblist")) {
+                        log.warn("[51job] 自动拦截并闪电关闭应届生弹出窗口: {}", u);
+                        popup.close(new Page.CloseOptions().setRunBeforeUnload(false));
+                    }
+                } catch (Exception ignored) {}
+            });
+        } catch (Exception ignored) {}
     }
 
     /**
@@ -1902,6 +1918,37 @@ public class PlaywrightManager {
      */
     public boolean isLoggedIn(String platform) {
         return loginStatus.getOrDefault(platform, false);
+    }
+
+    /**
+     * 把指定平台的自动化浏览器窗口弹到最前面（点击"开始投递"时调用，方便用户围观投递过程）
+     *
+     * @param platform 平台名称 boss/liepin/51job/zhilian
+     */
+    public void bringToFront(String platform) {
+        try {
+            Page target = switch (platform) {
+                case "boss" -> bossPage;
+                case "liepin" -> liepinPage;
+                case "51job" -> job51Page;
+                case "zhilian" -> zhilianPage;
+                default -> null;
+            };
+            if (target != null) {
+                target.bringToFront();
+                // macOS 下窗口被最小化时 bringToFront 可能唤不回，用 AppleScript 激活 Chrome 兜底
+                if (System.getProperty("os.name", "").toLowerCase().contains("mac")) {
+                    try {
+                        new ProcessBuilder("osascript", "-e", "tell application \"Google Chrome\" to activate")
+                                .start();
+                    } catch (Exception ignored) {
+                    }
+                }
+                log.info("已将{}浏览器窗口置于前台", platform);
+            }
+        } catch (Exception e) {
+            log.debug("浏览器窗口置前失败（不影响投递）: {}", e.getMessage());
+        }
     }
 
     /**

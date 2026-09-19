@@ -30,6 +30,38 @@ export default function Job51Page() {
   const API = process.env.API_BASE_URL || `${API_BASE}`
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [isDelivering, setIsDelivering] = useState(false)
+  const [isStopping, setIsStopping] = useState(false)
+  const [isQueued, setIsQueued] = useState(false)
+
+  // 每3秒同步后端真实投递/排队状态：按钮显示以服务端为准，页面过期或SSE断线也不会错乱
+  useEffect(() => {
+    const syncStatus = async () => {
+      try {
+        const [statusRes, queueRes] = await Promise.all([
+          fetch(`${API_BASE}/api/51job/status`),
+          fetch(`${API_BASE}/api/delivery/queue`),
+        ])
+        let running = false
+        let queuedFlag = false
+        if (statusRes.ok) {
+          const d = await statusRes.json()
+          running = !!d.isRunning
+        }
+        if (queueRes.ok) {
+          const q = await queueRes.json()
+          queuedFlag = !!(q.data && q.data['51job'])
+        }
+        setIsDelivering(running)
+        if (!running) setIsStopping(false)
+        setIsQueued(queuedFlag && !running)
+      } catch {
+        // 后端暂时不可达时保持当前显示，下个周期重试
+      }
+    }
+    syncStatus()
+    const timer = setInterval(syncStatus, 3000)
+    return () => clearInterval(timer)
+  }, [])
   const [checkingLogin, setCheckingLogin] = useState(true)
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const [showSaveDialog, setShowSaveDialog] = useState(false)
@@ -293,7 +325,7 @@ export default function Job51Page() {
       if (!response.ok) {
         // 后端返回错误状态码，恢复按钮
         console.warn('[51job] 停止投递请求失败，状态码:', response.status)
-        setIsDelivering(false)
+        setIsStopping(true)
         return
       }
       
@@ -303,16 +335,16 @@ export default function Job51Page() {
       // 根据后端返回结果切换按钮状态
       if (data.success) {
         // 停止成功，恢复按钮
-        setIsDelivering(false)
+        setIsStopping(true)
       } else {
         // 停止失败（可能任务未运行），也恢复按钮
         console.warn('[51job] 停止投递失败:', data.message)
-        setIsDelivering(false)
+        setIsStopping(true)
       }
     } catch (error) {
       // 网络异常或后端未启动，恢复按钮状态
       console.error('[51job] 停止投递请求异常:', error)
-      setIsDelivering(false)
+      setIsStopping(true)
     }
   }
 
@@ -402,31 +434,39 @@ export default function Job51Page() {
         icon={<BiBriefcase className="text-2xl" />}
         title="51job配置"
         subtitle="配置51job平台的求职参数"
-        iconClass="text-white"
-        accentBgClass="bg-blue-500"
+        
+        iconClass="text-blue-600 dark:text-blue-400" accentBgClass="bg-blue-50 dark:bg-blue-900/20"
         actions={
           <div className="flex items-center gap-2">
             {checkingLogin ? (
-              <Button size="sm" disabled className="rounded-full bg-gray-300 text-gray-600 cursor-not-allowed px-4 shadow">
+              <Button size="sm" disabled variant="secondary">
                 <BiPlay className="mr-1" /> 检查登录中...
               </Button>
             ) : !isLoggedIn ? (
-              <Button size="sm" disabled className="rounded-full bg-gray-300 text-gray-600 cursor-not-allowed px-4 shadow">
+              <Button size="sm" disabled variant="secondary">
                 <BiPlay className="mr-1" /> 请先登录51job
               </Button>
+            ) : isStopping ? (
+              <Button size="sm" disabled variant="secondary">
+                停止中...
+              </Button>
             ) : isDelivering ? (
-              <Button onClick={handleStopDelivery} size="sm" className="rounded-full bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+              <Button onClick={handleStopDelivery} size="sm" variant="destructive">
                 <BiStop className="mr-1" /> 停止投递
               </Button>
+            ) : isQueued ? (
+              <Button size="sm" disabled className="bg-amber-500 hover:bg-amber-600 text-white">
+                <BiPlay className="mr-1" /> 排队中…
+              </Button>
             ) : (
-              <Button onClick={handleStartDelivery} size="sm" className="rounded-full bg-gradient-to-r from-teal-500 to-green-500 hover:from-teal-600 hover:to-green-600 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+              <Button onClick={handleStartDelivery} size="sm">
                 <BiPlay className="mr-1" /> 开始投递
               </Button>
             )}
-            <Button onClick={() => setShowLogoutDialog(true)} size="sm" className="rounded-full bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+            <Button onClick={() => setShowLogoutDialog(true)} size="sm" variant="outline" className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30">
               <BiLogOut className="mr-1" /> 退出登录
             </Button>
-            <Button onClick={handleSaveConfig} size="sm" className="rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+            <Button onClick={handleSaveConfig} size="sm">
               <BiSave className="mr-1" /> 保存配置
             </Button>
           </div>
@@ -434,7 +474,7 @@ export default function Job51Page() {
       />
 
       <Tabs defaultValue="config" className="w-full">
-        <TabsList className="grid w-full grid-cols-2">
+        <TabsList className="mb-2">
           <TabsTrigger value="config">平台配置</TabsTrigger>
           <TabsTrigger value="analytics">投递分析</TabsTrigger>
         </TabsList>
@@ -519,7 +559,7 @@ export default function Job51Page() {
                     <div className="relative salary-dropdown-container">
                       {/* 下拉多选框 */}
                       <div
-                        className="flex h-10 w-full rounded-full px-4 py-2 text-sm border border-white/40 bg-white/5 shadow-[inset_0_1px_0_rgba(255,255,255,.25)] cursor-pointer hover:bg-white/10 transition-all duration-200"
+                        className="flex h-9 w-full rounded-lg px-3 py-1.5 text-sm border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-slate-900 dark:text-neutral-100 shadow-xs cursor-pointer hover:border-slate-300 dark:hover:border-neutral-700 transition-colors"
                         onClick={() => setSalaryDropdownOpen(!salaryDropdownOpen)}
                       >
                         <span className="truncate text-sm">
@@ -541,10 +581,10 @@ export default function Job51Page() {
                               return (
                                 <li
                                   key={o.code}
-                                  className={`group flex items-center gap-3 px-3 py-2 cursor-pointer transition-all border-b border-white/12 last:border-b-0 ${
-                                    !canSelect ? 'opacity-50 cursor-not-allowed' : 'hover:bg-white/12'
+                                  className={`group flex items-center gap-3 px-3 py-2 cursor-pointer transition-all border-b border-slate-100 dark:border-neutral-800 last:border-b-0 ${
+                                    !canSelect ? 'opacity-50 cursor-not-allowed' : 'hover:bg-slate-50 dark:hover:bg-neutral-800'
                                   } ${
-                                    isSelected ? 'bg-gradient-to-r from-emerald-500/12 to-cyan-500/12' : ''
+                                    isSelected ? 'bg-blue-50/70 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 font-medium' : 'text-slate-700 dark:text-neutral-300'
                                   }`}
                                   onClick={() => {
                                     if (!canSelect) return
@@ -563,8 +603,8 @@ export default function Job51Page() {
                                   }}
                                 >
                                   <span
-                                    className={`inline-flex h-4 w-4 items-center justify-center rounded-md border border-white/30 bg-white/10 shadow-inner transition-all ${
-                                      isSelected ? 'bg-emerald-400/60 border-emerald-300/80' : ''
+                                    className={`inline-flex h-4 w-4 items-center justify-center rounded border border-slate-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 shadow-xs transition-all ${
+                                      isSelected ? 'bg-blue-600 dark:bg-blue-600 border-blue-600 text-white' : ''
                                     }`}
                                   >
                                     {isSelected && (
@@ -599,7 +639,7 @@ export default function Job51Page() {
       {/* 退出确认弹框 */}
       {showLogoutDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <Card className="bg-white dark:bg-neutral-900 rounded-2xl shadow-2xl w-[92%] max-w-sm border-0">
+          <Card className="bg-white dark:bg-neutral-900 rounded-xl shadow-2xl w-[92%] max-w-sm border-0">
             <CardHeader className="pb-2">
               <CardTitle className="text-lg flex items-center gap-2">
                 <BiLogOut className="text-red-500" /> 确认退出登录
@@ -608,8 +648,8 @@ export default function Job51Page() {
             <CardContent>
               <p className="text-sm text-muted-foreground mb-4">退出后将清除Cookie并切换为未登录状态。</p>
               <div className="flex justify-end gap-2">
-                <Button variant="ghost" onClick={() => setShowLogoutDialog(false)} className="rounded-full px-4">取消</Button>
-                <Button onClick={async () => { await triggerLogout(); setShowLogoutDialog(false) }} className="rounded-full bg-gradient-to-r from-red-500 to-rose-600 text-white px-4">确认退出</Button>
+                <Button variant="ghost" onClick={() => setShowLogoutDialog(false)}>取消</Button>
+                <Button variant="destructive" onClick={async () => { await triggerLogout(); setShowLogoutDialog(false) }}>确认退出</Button>
               </div>
             </CardContent>
           </Card>
@@ -618,17 +658,17 @@ export default function Job51Page() {
 
       {/* 退出登录结果弹框 */}
       {showLogoutResultDialog && logoutResult && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-          <Card className="bg-white dark:bg-neutral-900 rounded-2xl shadow-2xl w-[92%] max-w-sm border-0">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs">
+          <Card className="bg-white dark:bg-neutral-900 rounded-xl shadow-2xl w-[92%] max-w-sm border border-slate-200 dark:border-neutral-800">
             <CardHeader className="pb-2">
-              <CardTitle className="text-lg flex items-center gap-2">
+              <CardTitle className="text-base flex items-center gap-2">
                 <BiLogOut className={logoutResult.success ? 'text-green-500' : 'text-red-500'} />
                 {logoutResult.success ? '退出登录成功' : '退出登录失败'}
               </CardTitle>
             </CardHeader>
             <CardContent>
               <p className="text-sm text-muted-foreground mb-4">{logoutResult.message}</p>
-              <Button onClick={() => setShowLogoutResultDialog(false)} className={`rounded-full px-4 ${logoutResult.success ? 'bg-green-500' : 'bg-red-500'} text-white`}>知道了</Button>
+              <Button onClick={() => setShowLogoutResultDialog(false)} variant={logoutResult.success ? "default" : "destructive"}>知道了</Button>
             </CardContent>
           </Card>
         </div>
@@ -636,17 +676,17 @@ export default function Job51Page() {
 
       {/* 保存Cookie结果弹框 */}
       {showSaveDialog && saveResult && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-          <Card className="bg-white dark:bg-neutral-900 rounded-2xl shadow-2xl w-[92%] max-w-sm border-0">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs">
+          <Card className="bg-white dark:bg-neutral-900 rounded-xl shadow-2xl w-[92%] max-w-sm border border-slate-200 dark:border-neutral-800">
             <CardHeader className="pb-2">
-              <CardTitle className="text-lg flex items-center gap-2">
+              <CardTitle className="text-base flex items-center gap-2">
                 <BiSave className={saveResult.success ? 'text-green-500' : 'text-red-500'} />
                 {saveResult.success ? '保存成功' : '保存失败'}
               </CardTitle>
             </CardHeader>
             <CardContent>
               <p className="text-sm text-muted-foreground mb-4">{saveResult.message}</p>
-              <Button onClick={() => setShowSaveDialog(false)} className={`rounded-full px-4 ${saveResult.success ? 'bg-green-500' : 'bg-red-500'} text-white`}>知道了</Button>
+              <Button onClick={() => setShowSaveDialog(false)} variant={saveResult.success ? "default" : "destructive"}>知道了</Button>
             </CardContent>
           </Card>
         </div>

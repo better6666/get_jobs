@@ -35,6 +35,7 @@ public class BossController {
 
     private final BossJobService bossJobService;
     private final PlaywrightManager playwrightManager;
+    private final com.getjobs.worker.service.DeliveryTaskQueue deliveryTaskQueue;
     private final CookieService cookieService;
 
     private final List<SseEmitter> bossProgressEmitters = new CopyOnWriteArrayList<>();
@@ -105,12 +106,28 @@ public class BossController {
                 response.put("runningSeconds", seconds);
                 return ResponseEntity.badRequest().body(response);
             }
-            CompletableFuture.runAsync(() -> bossJobService.executeDelivery(pm -> {
-                sendBossProgress(pm);
-                log.info("[{}] {}", pm.getPlatform(), pm.getMessage());
-            }));
+            if (deliveryTaskQueue.isQueued("boss")) {
+                response.put("success", false);
+                response.put("message", "Boss任务已在队列中，等待其他平台投递完成后自动开始");
+                response.put("status", "queued");
+                return ResponseEntity.badRequest().body(response);
+            }
+            boolean accepted = deliveryTaskQueue.submit("boss", () -> {
+                // 轮到执行时才把浏览器窗口弹到最前面
+                playwrightManager.bringToFront("boss");
+                bossJobService.executeDelivery(pm -> {
+                    sendBossProgress(pm);
+                    log.info("[{}] {}", pm.getPlatform(), pm.getMessage());
+                });
+            });
+            if (!accepted) {
+                response.put("success", false);
+                response.put("message", "Boss任务已在队列中，请勿重复提交");
+                response.put("status", "queued");
+                return ResponseEntity.badRequest().body(response);
+            }
             response.put("success", true);
-            response.put("message", "Boss任务启动成功");
+            response.put("message", "Boss任务启动成功（如其他平台正在投递则自动排队）");
             response.put("status", "started");
             log.info("通过API启动Boss任务成功");
             return ResponseEntity.ok(response);

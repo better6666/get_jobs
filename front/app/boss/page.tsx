@@ -99,6 +99,38 @@ export default function BossPage() {
   const [loading, setLoading] = useState(true)
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [isDelivering, setIsDelivering] = useState(false)
+  const [isStopping, setIsStopping] = useState(false)
+  const [isQueued, setIsQueued] = useState(false)
+  
+  // 每3秒同步后端真实投递/排队状态：按钮显示以服务端为准，页面过期或SSE断线也不会错乱
+  useEffect(() => {
+    const syncStatus = async () => {
+      try {
+        const [statusRes, queueRes] = await Promise.all([
+          fetch(`${API_BASE}/api/boss/status`),
+          fetch(`${API_BASE}/api/delivery/queue`),
+        ])
+        let running = false
+        let queuedFlag = false
+        if (statusRes.ok) {
+          const d = await statusRes.json()
+          running = !!d.isRunning
+        }
+        if (queueRes.ok) {
+          const q = await queueRes.json()
+          queuedFlag = !!(q.data && q.data.boss)
+        }
+        setIsDelivering(running)
+        if (!running) setIsStopping(false)
+        setIsQueued(queuedFlag && !running)
+      } catch {
+        // 后端暂时不可达时保持当前显示，下个周期重试
+      }
+    }
+    syncStatus()
+    const timer = setInterval(syncStatus, 3000)
+    return () => clearInterval(timer)
+  }, [])
   const [checkingLogin, setCheckingLogin] = useState(true)
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const [showSaveDialog, setShowSaveDialog] = useState(false)
@@ -512,16 +544,16 @@ export default function BossPage() {
 
       if (data.success) {
         // 停止成功：不弹框
-        setIsDelivering(false)
+        setIsStopping(true)
       } else {
         // 停止失败：也要将状态设置为未投递（因为可能任务已经结束）
         console.warn('停止失败：', data.message)
-        setIsDelivering(false)
+        setIsStopping(true)
       }
     } catch (error) {
       console.error('Failed to stop delivery:', error)
       // 停止失败：也要将状态设置为未投递
-      setIsDelivering(false)
+      setIsStopping(true)
     }
   }
 
@@ -557,31 +589,39 @@ export default function BossPage() {
         icon={<BiBriefcase className="text-2xl" />}
         title="Boss直聘配置"
         subtitle="配置Boss直聘平台的求职参数"
-        iconClass="text-white"
-        accentBgClass="bg-teal-500"
+        
+        iconClass="text-teal-600 dark:text-teal-400" accentBgClass="bg-teal-50 dark:bg-teal-900/20"
         actions={
           <div className="flex items-center gap-2">
             {checkingLogin ? (
-              <Button size="sm" disabled className="rounded-full bg-gray-300 text-gray-600 cursor-not-allowed px-4 shadow">
+              <Button size="sm" disabled variant="secondary">
                 <BiPlay className="mr-1" /> 检查登录中...
               </Button>
             ) : !isLoggedIn ? (
-              <Button size="sm" disabled className="rounded-full bg-gray-300 text-gray-600 cursor-not-allowed px-4 shadow">
+              <Button size="sm" disabled variant="secondary">
                 <BiPlay className="mr-1" /> 请先登录Boss
               </Button>
+            ) : isStopping ? (
+              <Button size="sm" disabled variant="secondary">
+                停止中...
+              </Button>
             ) : isDelivering ? (
-              <Button onClick={handleStopDelivery} size="sm" className="rounded-full bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+              <Button onClick={handleStopDelivery} size="sm" variant="destructive">
                 <BiStop className="mr-1" /> 停止投递
               </Button>
+            ) : isQueued ? (
+              <Button size="sm" disabled className="bg-amber-500 hover:bg-amber-600 text-white">
+                <BiPlay className="mr-1" /> 排队中…
+              </Button>
             ) : (
-              <Button onClick={handleStartDelivery} size="sm" className="rounded-full bg-gradient-to-r from-teal-500 to-green-500 hover:from-teal-600 hover:to-green-600 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+              <Button onClick={handleStartDelivery} size="sm" className="bg-teal-600 hover:bg-teal-700 text-white">
                 <BiPlay className="mr-1" /> 开始投递
               </Button>
             )}
-            <Button onClick={() => setShowLogoutDialog(true)} size="sm" className="rounded-full bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+            <Button onClick={() => setShowLogoutDialog(true)} size="sm" variant="outline" className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30">
               <BiLogOut className="mr-1" /> 退出登录
             </Button>
-            <Button onClick={() => handleSave(false)} size="sm" className="rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white px-4 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+            <Button onClick={() => handleSave(false)} size="sm">
               <BiSave className="mr-1" /> 保存配置
             </Button>
           </div>
@@ -589,7 +629,7 @@ export default function BossPage() {
       />
 
       <Tabs defaultValue="config" className="w-full">
-        <TabsList className="grid w-full grid-cols-2">
+        <TabsList className="mb-2">
           <TabsTrigger value="config">平台配置</TabsTrigger>
           <TabsTrigger value="analytics">投递分析</TabsTrigger>
         </TabsList>
@@ -925,7 +965,7 @@ export default function BossPage() {
       {/* 退出确认弹框 */}
       {showLogoutDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white dark:bg-neutral-900 rounded-2xl shadow-2xl w-[92%] max-w-sm border border-gray-200 dark:border-neutral-800 animate-in fade-in zoom-in-95">
+          <div className="bg-white dark:bg-neutral-900 rounded-xl shadow-2xl w-[92%] max-w-sm border border-slate-200/80 dark:border-neutral-800 animate-in fade-in zoom-in-95">
             <Card className="border-0">
               <CardHeader className="pb-2">
                 <CardTitle className="text-lg flex items-center gap-2">
@@ -939,16 +979,15 @@ export default function BossPage() {
                   <Button
                     variant="ghost"
                     onClick={() => setShowLogoutDialog(false)}
-                    className="rounded-full px-4"
                   >
                     取消
                   </Button>
                   <Button
+                    variant="destructive"
                     onClick={async () => {
                       await triggerLogout()
                       setShowLogoutDialog(false)
                     }}
-                    className="rounded-full bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white px-4"
                   >
                     确认退出
                   </Button>
@@ -961,11 +1000,11 @@ export default function BossPage() {
 
       {/* 退出登录结果弹框 */}
       {showLogoutResultDialog && logoutResult && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
-          <div className="bg-white dark:bg-neutral-900 rounded-2xl shadow-2xl w-[92%] max-w-sm border border-gray-200 dark:border-neutral-800 animate-in fade-in zoom-in-95">
-            <Card className="border-0">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs" role="dialog" aria-modal="true">
+          <div className="bg-white dark:bg-neutral-900 rounded-xl shadow-2xl w-[92%] max-w-sm border border-slate-200 dark:border-neutral-800 animate-in fade-in zoom-in-95">
+            <Card className="border-0 shadow-none">
               <CardHeader className="pb-2">
-                <CardTitle className="text-lg flex items-center gap-2">
+                <CardTitle className="text-base flex items-center gap-2">
                   <BiLogOut className={logoutResult.success ? 'text-green-500' : 'text-red-500'} />
                   {logoutResult.success ? '退出登录成功' : '退出登录失败'}
                 </CardTitle>
@@ -975,7 +1014,7 @@ export default function BossPage() {
                 <div className="flex justify-end gap-2">
                   <Button
                     onClick={() => setShowLogoutResultDialog(false)}
-                    className={`rounded-full px-4 ${logoutResult.success ? 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white' : 'bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white'}`}
+                    variant={logoutResult.success ? "default" : "destructive"}
                   >
                     知道了
                   </Button>
@@ -988,11 +1027,11 @@ export default function BossPage() {
 
       {/* 保存结果弹框 */}
       {showSaveDialog && saveResult && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" role="dialog" aria-modal="true">
-          <div className="bg-white dark:bg-neutral-900 rounded-2xl shadow-2xl w-[92%] max-w-sm border border-gray-200 dark:border-neutral-800 animate-in fade-in zoom-in-95">
-            <Card className="border-0">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs" role="dialog" aria-modal="true">
+          <div className="bg-white dark:bg-neutral-900 rounded-xl shadow-2xl w-[92%] max-w-sm border border-slate-200 dark:border-neutral-800 animate-in fade-in zoom-in-95">
+            <Card className="border-0 shadow-none">
               <CardHeader className="pb-2">
-                <CardTitle className="text-lg flex items-center gap-2">
+                <CardTitle className="text-base flex items-center gap-2">
                   <BiSave className={saveResult.success ? 'text-green-500' : 'text-red-500'} />
                   {saveResult.title ?? (saveResult.success ? '保存成功' : '保存失败')}
                 </CardTitle>
@@ -1002,7 +1041,7 @@ export default function BossPage() {
                 <div className="flex justify-end gap-2">
                   <Button
                     onClick={() => setShowSaveDialog(false)}
-                    className={`rounded-full px-4 ${saveResult.success ? 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white' : 'bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white'}`}
+                    variant={saveResult.success ? "default" : "destructive"}
                   >
                     知道了
                   </Button>
@@ -1142,42 +1181,37 @@ function MultiSelect({
         ref={buttonRef}
         type="button"
         onClick={() => { const next = !open; setOpen(next); if (!next) onClose?.() }}
-        className="flex h-10 w-full items-center justify-between rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm shadow-[inset_0_1px_0_rgba(255,255,255,.25)] transition-all duration-200 hover:bg-white/15 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-cyan-400/40 focus:ring-offset-0"
+        className="flex h-9 w-full items-center justify-between rounded-lg border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-3 py-1.5 text-sm shadow-xs transition-colors duration-150 hover:border-slate-300 dark:hover:border-neutral-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
       >
         <span className="truncate text-sm">
           {selectedNames.length > 0 ? selectedNames.join('，') : (placeholder || '请选择')}
         </span>
-        <span className={`ml-2 text-xs text-muted-foreground transition-transform duration-200 ${open ? 'rotate-180' : ''}`}>▼</span>
+        <span className={`ml-2 text-xs text-slate-400 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}>▼</span>
       </button>
       {open && mounted && createPortal(
         <div
           ref={dropdownRef}
-          className="dropdown-panel p-2"
+          className="dropdown-panel p-1.5"
           style={{
             top: `${dropdownPosition.top}px`,
             left: `${dropdownPosition.left}px`,
             width: `${dropdownPosition.width}px`,
           }}
         >
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-0.5">
             {options.map((opt) => {
               const checked = selected.includes(opt.code)
               return (
                 <div
                   key={opt.id}
-                  className={`group inline-flex items-center justify-between gap-3 rounded-full px-3 py-2 cursor-pointer transition-all border ${checked ? 'border-teal-300/60 bg-gradient-to-r from-teal-500/12 to-cyan-500/12 text-teal-900 dark:text-teal-200 shadow' : 'border-white/20 bg-white/8 text-foreground hover:bg-white/12'}`}
-                  onClick={(e) => {
-                    console.log('[MultiSelect] div 被点击', {
-                      optionCode: opt.code,
-                      optionName: opt.name,
-                      currentChecked: checked
-                    })
+                  className={`group flex items-center justify-between gap-2.5 rounded-md px-2.5 py-1.5 cursor-pointer text-sm transition-colors ${checked ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 font-medium' : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-800'}`}
+                  onClick={() => {
                     toggle(opt.code)
                   }}
                 >
-                  <span className="flex items-center gap-3">
-                    <span className={`inline-flex h-4 w-4 items-center justify-center rounded-md border border-white/30 bg-white/10 shadow-inner transition-all ${checked ? 'bg-teal-400/60 border-teal-300/80' : ''}`}></span>
-                    <span className="text-sm truncate">{opt.name}</span>
+                  <span className="text-sm truncate">{opt.name}</span>
+                  <span className={`inline-flex h-4 w-4 items-center justify-center rounded border transition-colors ${checked ? 'bg-blue-600 border-blue-600 text-white text-xs font-bold' : 'border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-800'}`}>
+                    {checked && '✓'}
                   </span>
                 </div>
               )
