@@ -141,8 +141,12 @@ public class AiService {
         // 构建 JSON 请求体
         JSONObject requestData = new JSONObject();
         requestData.put("model", model);
-        requestData.put("temperature", 0.7);
-        requestData.put("max_tokens", 250);
+        requestData.put("temperature", 0.9);
+        // 推理模型（如 deepseek-v4-pro）先输出思考链 reasoning_content、再输出正文 content。
+        // 实测单个招呼语的思考链就有 1100+ token，max_tokens 太小会把预算全耗在思考链上、
+        // 正文被截断成空，最终被判失败回退固定 sayHi，表现为每条打招呼语都长一个样。
+        // 放宽到 8000，给思考链留足空间、保证正文能完整产出。
+        requestData.put("max_tokens", 8000);
         if (endpoint.endsWith("/responses")) {
             // Responses API 采用 input 字段
             requestData.put("input", content);
@@ -201,6 +205,9 @@ public class AiService {
                                 responseContent = messageObject.optString("content", null);
                                 if (responseContent == null || responseContent.isBlank()) {
                                     responseContent = messageObject.optString("reasoning_content", null);
+                                    if (responseContent != null && !responseContent.isBlank()) {
+                                        log.warn("AI 正文 content 为空、仅返回思考链 reasoning_content，疑似 max_tokens 截断，回退内容将按非招呼语处理");
+                                    }
                                 }
                                 if (responseContent == null || responseContent.isBlank()) {
                                     responseContent = messageObject.optString("reasoning", null);

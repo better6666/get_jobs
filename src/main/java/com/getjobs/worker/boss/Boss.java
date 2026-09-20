@@ -618,7 +618,9 @@ public class Boss {
             if (!filtered) {
                 jobScore = scoreJob(positionName, entity.getDegree(), entity.getExperience(),
                         entity.getIndustry(), entity.getJobDescription());
-                if (jobScore < 80) {
+                // 与主投递循环共用同一套可配置阈值，避免这里写死 80 导致两处判定不一致
+                int threshold = scoreRules != null ? scoreRules.threshold : 80;
+                if (jobScore < threshold) {
                     filtered = true;
                     log.info("岗位低分跳过 | {} | {} | 得分: {}", positionName, companyName, jobScore);
                 }
@@ -660,7 +662,8 @@ public class Boss {
                             com.getjobs.application.service.HardFilterService.FilterResult hf = hardFilterService.checkFilter(pj);
                             com.getjobs.application.service.JobScorerService.ScoreResult sr = jobScorerService.calculateMatchScore(pj);
                             com.getjobs.application.entity.ResumeVersionEntity bestResume = (resumeService != null) ? resumeService.selectBestResume(pj) : null;
-                            String greeting = (aiGreetingService != null) ? aiGreetingService.generateGreeting(pj, bestResume) : "";
+                            // 已过滤岗位不再调 AI 生成话术：推理模型单次 30-40s，对注定不投的岗位是纯浪费
+                            String greeting = (!filtered && aiGreetingService != null) ? aiGreetingService.generateGreeting(pj, bestResume) : "";
                             com.getjobs.application.entity.ApplicationRecordEntity appRec = applicationRecordService.recordDiscoveredJob(pj, hf, sr, bestResume, greeting);
                             if ("APPLIED".equals(entity.getDeliveryStatus()) && appRec != null) {
                                 applicationRecordService.markAsApplied(appRec.getId(), greeting);
